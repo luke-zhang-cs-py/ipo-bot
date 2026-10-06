@@ -71,7 +71,12 @@ def test_record_forecast_logs_and_validates(tmp_path, monkeypatch):
     assert not err
     row = json.loads((tmp_path / "ledger.jsonl").read_text(encoding="utf-8"))
     assert row["symbol"] == "AAPL" and row["horizon_months"] == 12 and row["date"] == dt.date.today().isoformat()
-    for bad in ({"rating": "Strong Buy"}, {"price": 0}, {"price_date": "last week"}, {"symbol": "A; rm"}):
+    full = {**ok, "bull_value": 260, "bull_prob": 25, "bear_value": 150, "bear_prob": 20}
+    assert not tools.run_tool("record_forecast", full)[1]
+    last = json.loads((tmp_path / "ledger.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert last["bear_value"] == 150 and last["bull_prob"] == 25
+    for bad in ({"rating": "Strong Buy"}, {"price": 0}, {"price_date": "last week"}, {"symbol": "A; rm"},
+                {"bull_prob": 140}, {"bear_value": 300, "bull_value": 200}, {"bear_value": -1}):
         assert tools.run_tool("record_forecast", {**ok, **bad})[1], bad
 
 

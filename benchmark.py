@@ -47,6 +47,8 @@ UNIVERSES = {
                       "CAT", "GE", "MMM", "BA", "UNH"],
     "Global (country ETFs)": ["SPY", "EFA", "EEM", "EWJ", "EWG", "EWU", "EWC", "EWA", "EWZ", "FXI", "EWY", "EWT",
                               "EWH", "EWS", "EWQ"],
+    # Sector funds never delist, so this one has no survivor bias.
+    "US sectors (SPDR ETFs)": ["XLB", "XLE", "XLF", "XLI", "XLK", "XLP", "XLU", "XLV", "XLY"],
 }
 
 

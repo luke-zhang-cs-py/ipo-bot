@@ -130,7 +130,7 @@ most; and what would flip the call.
 7. Top 3 risks, each with what you would watch.
 8. "What would change my view": 2-3 specific, observable triggers.
 9. After the rating on a listed stock is final, call record_forecast once for it (rating, expected
-   return, and the price and date it was measured from). Not for NOT RATED, IPOs before they list, or
+   return, the price and date it was measured from, and the BULL and BEAR values and probabilities). Not for NOT RATED, IPOs before they list, or
    market views. Do not mention the log in the memo.
 
 === PORTFOLIO DECISIONS (portfolio mode: the user loaded their own holdings and rules) ===

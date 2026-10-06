@@ -78,6 +78,23 @@ contaminated. It is tested forward instead. Each rating it gives on a listed sto
 months are up. The universes are today's survivors, which flatters long-only returns: compare the rows with
 each other, not with zero.
 
+## Calibration
+
+```bash
+python calibration.py            # about 4 minutes: includes 40 random re-runs per test as the luck baseline
+python calibration.py --ledger   # and the bot's own matured forecasts
+```
+
+Do the numbers mean what they say? Each algorithm is turned into an expected return, a probability of
+beating the median and 50/80/90% ranges, refitted every month on outcomes already known, on three
+universes (US large caps, country ETFs, and the nine US sector ETFs, which have no survivor bias). It
+reports the stock-against-stock calibration slope (1 = forecast gaps came true in full), out-of-sample R2,
+Brier skill, calibration error, range coverage, a market-level check shared by every algorithm, the same
+slope over consecutive 3-year blocks, and what the bot's +15%/-10% rating thresholds delivered on top of each
+algorithm. Every score is compared with 40 re-runs of the random control: `*` marks better than luck, `!`
+worse. For the bot, it also checks how often its bull and bear cases came true against the probabilities
+it gave them.
+
 ## Test
 
 ```bash
@@ -103,6 +120,7 @@ memos as well: the checks catch missing parts, not bad reasoning.
 | `checks.py` | The memo rules a script can check. |
 | `stress_test.py` | The 11 test questions, graded by `checks.py`. |
 | `benchmark.py` | Walk-forward tests of simple prediction algorithms, and scoring of the bot's logged forecasts. |
+| `calibration.py` | Whether forecasts mean what they say: slopes, probabilities and ranges against outcomes, with a luck baseline. |
 
 ## Cost
 

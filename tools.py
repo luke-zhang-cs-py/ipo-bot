@@ -336,7 +336,11 @@ TOOL_DEFS = [
                            "expected_return_pct": {"type": "number", "description": "e.g. 18.5 for +18.5%"},
                            "price": {"type": "number", "description": "The price the expected return is measured from"},
                            "price_date": {"type": "string", "description": "YYYY-MM-DD of that price"},
-                           "horizon_months": {"type": "integer", "description": "Default 12"}},
+                           "horizon_months": {"type": "integer", "description": "Default 12"},
+                           "bull_value": {"type": "number", "description": "BULL-case value per share"},
+                           "bull_prob": {"type": "number", "description": "BULL-case probability, percent"},
+                           "bear_value": {"type": "number", "description": "BEAR-case value per share"},
+                           "bear_prob": {"type": "number", "description": "BEAR-case probability, percent"}},
                           ["symbol", "rating", "expected_return_pct", "price", "price_date"])},
 ]
 
@@ -394,7 +398,8 @@ def portfolio_size(symbol, entry_price, stop_price, conviction, sector=None):
 LEDGER = pathlib.Path(__file__).resolve().parent / "forecasts" / "ledger.jsonl"
 
 
-def record_forecast(symbol, rating, expected_return_pct, price, price_date, horizon_months=12):
+def record_forecast(symbol, rating, expected_return_pct, price, price_date, horizon_months=12,
+                    bull_value=None, bull_prob=None, bear_value=None, bear_prob=None):
     sym = str(symbol).strip().upper()
     if not re.fullmatch(r"[A-Z0-9.\-]{1,12}", sym):
         raise ToolError(f"not a ticker: {symbol!r}")
@@ -405,13 +410,23 @@ def record_forecast(symbol, rating, expected_return_pct, price, price_date, hori
             raise ToolError(f"{what} must be a number")
     if price <= 0:
         raise ToolError("price must be above 0")
+    scen = {"bull_value": bull_value, "bull_prob": bull_prob, "bear_value": bear_value, "bear_prob": bear_prob}
+    for k, v in scen.items():
+        if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0):
+            raise ToolError(f"{k} must be a number, 0 or more")
+    for k in ("bull_prob", "bear_prob"):
+        if scen[k] is not None and scen[k] > 100:
+            raise ToolError(f"{k} is a percentage: at most 100")
+    if bull_value is not None and bear_value is not None and bear_value > bull_value:
+        raise ToolError("bear_value must not be above bull_value")
     try:
         dt.date.fromisoformat(str(price_date))
     except ValueError as e:
         raise ToolError("price_date must be YYYY-MM-DD") from e
     entry = {"date": dt.date.today().isoformat(), "symbol": sym, "rating": rating,
              "expected_return_pct": float(expected_return_pct), "price": float(price),
-             "price_date": str(price_date), "horizon_months": int(horizon_months)}
+             "price_date": str(price_date), "horizon_months": int(horizon_months),
+             **{k: float(v) for k, v in scen.items() if v is not None}}
     LEDGER.parent.mkdir(exist_ok=True)
     with LEDGER.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
