@@ -107,6 +107,42 @@ Three harder tests on the benchmark: permutation p-values with a Benjamini-Hochb
 36 algorithm-universe-horizon tests (false-discovery rate 10%); a holdout that picks what worked before
 2018 and checks it from 2018 on; and the top-third portfolios after 0-50 basis points of trading costs.
 
+## Accuracy checks and the test kit
+
+The system prompt makes the bot run eleven accuracy checks before every answer (ACCURACY CHECKS): maths in the
+calculator, identity (name, ticker, exchange, share class), freshness, reconciliation (market cap, EV, multiples,
+parts to totals, one share count), periods and units, outliers, confirmation against the primary filing, scenario
+consistency, citations, "unknown" instead of guesses, and a closing KEY NUMBERS JSON block.
+
+```bash
+python verify.py memos/<memo>.md                 # check a memo's KEY NUMBERS block: free
+python ipo_bot.py --audit "Rate <ticker>"        # answer, then a second model call audits it against the 11 checks
+python kit.py calc                               # calculation cases against exact expected outputs: free
+python kit.py traps --yes                        # hallucination traps (fake company, made-up ticker, future date...)
+python kit.py stale --yes                        # tools off: no current price or rate allowed
+python kit.py rules --yes                        # hype, inside information, guarantees, pump posts, personal amounts
+python kit.py consistency --yes                  # the same question 3 times plus rewordings
+python kit.py golden --yes                       # the golden set, once you fill in testkit/golden_set.json
+python kit.py find-ipos 2026-07-01 2026-09-30    # first-time IPOs from SEC prospectuses, for the backtest: free
+python kit.py backtest --yes                     # those IPOs as of the day before pricing, scored at 1, 6, 12 months
+python kit.py track                              # the bot's matured recommendations: vs SPY, Brier, by conviction
+python kit.py regress --yes                      # calc, traps, stale, rules, golden; scores kept in testkit/history.jsonl
+```
+
+| Part | Where |
+|---|---|
+| Golden set template (25 stocks and IPOs) and scoring rubric | `testkit/golden_set.json`, `testkit/rubric.md` |
+| Calculation tests with exact outputs | `testkit/calc_cases.json` |
+| Hallucination traps, stale-data, rule and consistency tests | `testkit/traps.json`, `stale.json`, `rules.json`, `consistency.json` |
+| Backtest without hindsight | `kit.py backtest`: the data tools are cut off at the as-of date (filings, XBRL, FRED, prices) and web search is off; only IPOs after the model's June 2026 training cutoff are clean |
+| Live tracking | every rating is logged with conviction and all three scenarios (`forecasts/ledger.jsonl`); `track.py` scores them |
+| Second-pass auditor | `auditor_prompt.md`, `audit.py` (structured JSON verdict; recomputed so a failed check cannot pass) |
+| Regression history | `testkit/history.jsonl`, keyed by a fingerprint of the system prompt |
+| JSON checker | `verify.py` |
+
+Claude Opus 5.5 does not accept a temperature setting (the API rejects it), so the consistency test measures the
+spread at the default. Every `--yes` command calls the model and costs API credit.
+
 ## Test
 
 ```bash
@@ -132,6 +168,7 @@ memos as well: the checks catch missing parts, not bad reasoning.
 | `checks.py` | The memo rules a script can check. |
 | `stress_test.py` | The 11 test questions, graded by `checks.py`. |
 | `benchmark.py` | Walk-forward tests of simple prediction algorithms, and scoring of the bot's logged forecasts. |
+| `verify.py` / `audit.py` / `kit.py` / `track.py` | The KEY NUMBERS checker, the second-pass auditor, the test kit, live tracking. |
 | `robustness.py` | Multiple-testing correction, a before/after-2018 holdout, and trading costs. |
 | `calibration.py` | Whether forecasts mean what they say: slopes, probabilities and ranges against outcomes, with a luck baseline. |
 

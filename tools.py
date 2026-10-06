@@ -26,6 +26,14 @@ TIMEOUT = 25            # seconds per HTTP request
 MAX_RESULT_CHARS = 30_000
 DOC_CHUNK_CHARS = 25_000
 RATINGS = ["Overweight", "Equal-weight", "Underweight"]     # what record_forecast accepts
+CONVICTIONS = ["Low", "Medium", "High"]
+
+# Set by a backtest (kit.py backtest): nothing filed, dated or observed after this day reaches the model.
+AS_OF = {"date": None}
+
+
+def _cutoff():
+    return AS_OF["date"]
 
 
 class ToolError(Exception):
@@ -101,6 +109,8 @@ def edgar_filings(cik, forms=None, limit=20):
         for i, form in enumerate(cols.get("form", [])):
             if want and form.upper() not in want:
                 continue
+            if _cutoff() and cols["filingDate"][i] > _cutoff():
+                continue
             acc = cols["accessionNumber"][i]
             doc = cols["primaryDocument"][i]
             out.append({
@@ -133,11 +143,33 @@ def _strip_html(text):
     return re.sub(r"\n\s*\n+", "\n\n", text).strip()
 
 
+def _check_filed_by_cutoff(path):
+    """In a backtest, read a filing only if it was filed on or before the cutoff."""
+    m = re.match(r"/Archives/edgar/data/(\d+)/(\d{18})/", path)
+    if not m:
+        raise ToolError("in a backtest only filing documents (/Archives/edgar/data/<cik>/<accession>/...) can be read")
+    cik, acc = m.groups()
+    acc = f"{acc[:10]}-{acc[10:12]}-{acc[12:]}"
+    sub = json.loads(_get(f"https://data.sec.gov/submissions/CIK{_cik10(cik)}.json", _sec_headers()))
+    pages = [sub.get("filings", {}).get("recent", {})]
+    pages += [json.loads(_get(f"https://data.sec.gov/submissions/{p['name']}", _sec_headers()))
+              for p in sub.get("filings", {}).get("files", [])]
+    for cols in pages:
+        if acc in cols.get("accessionNumber", []):
+            filed = cols["filingDate"][cols["accessionNumber"].index(acc)]
+            if filed > _cutoff():
+                raise ToolError(f"filed {filed}, after the backtest date {_cutoff()}")
+            return
+    raise ToolError("filing not found in the company's SEC filing list")
+
+
 def edgar_document(url, part=1):
     """A filing's text, in parts of DOC_CHUNK_CHARS characters. Only sec.gov URLs."""
     parsed = urllib.parse.urlsplit(str(url))
     if parsed.scheme != "https" or not (parsed.netloc == "www.sec.gov" or parsed.netloc.endswith(".sec.gov")):
         raise ToolError("edgar_document reads https://www.sec.gov filings only")
+    if _cutoff():
+        _check_filed_by_cutoff(parsed.path)
     text = _strip_html(_get(str(url), _sec_headers()))
     parts = max(1, math.ceil(len(text) / DOC_CHUNK_CHARS))
     part = max(1, min(int(part), parts))
@@ -167,7 +199,8 @@ def edgar_financials(cik, concepts=None, periods=8):
         if not c:
             continue
         for unit, vals in c.get("units", {}).items():
-            vals = sorted((v for v in vals if v.get("form") in ("10-K", "10-Q", "20-F", "S-1", "S-1/A", "F-1", "424B4")),
+            vals = sorted((v for v in vals if v.get("form") in ("10-K", "10-Q", "20-F", "S-1", "S-1/A", "F-1", "424B4")
+                           and not (_cutoff() and v.get("filed", "") > _cutoff())),
                           key=lambda v: (v.get("end", ""), v.get("filed", "")), reverse=True)
             seen, rows = set(), []
             for v in vals:
@@ -205,6 +238,8 @@ def fred_series(series_id, start=None, limit=24):
               "limit": max(1, min(int(limit), 500))}
     if start:
         params["observation_start"] = str(start)
+    if _cutoff():
+        params["observation_end"] = _cutoff()
     url = "https://api.stlouisfed.org/fred/series/observations?" + urllib.parse.urlencode(params)
     obs = json.loads(_get(url)).get("observations", [])
     public = url.replace(key, "***")
@@ -235,6 +270,13 @@ def market_data(endpoint, params=None):
         raise ToolError(f"unknown endpoint {endpoint!r}; one of {sorted(FMP_ENDPOINTS)}")
     path, allowed = FMP_ENDPOINTS[endpoint]
     q = {k: str(v) for k, v in (params or {}).items() if k in allowed and v not in (None, "")}
+    if _cutoff():
+        # Quotes, profiles, estimates and the calendar are today's data: in a backtest only past prices remain.
+        if endpoint != "price_history":
+            raise ToolError(f"{endpoint} is current data, not available in a backtest dated {_cutoff()}")
+        q["to"] = min(q.get("to") or _cutoff(), _cutoff())
+        if q.get("from", "") > q["to"]:
+            raise ToolError(f"'from' is after the backtest date {_cutoff()}")
     q["apikey"] = key
     url = f"https://financialmodelingprep.com/{path}?" + urllib.parse.urlencode(q)
     data = json.loads(_get(url))
@@ -340,7 +382,10 @@ TOOL_DEFS = [
                            "bull_value": {"type": "number", "description": "BULL-case value per share"},
                            "bull_prob": {"type": "number", "description": "BULL-case probability, percent"},
                            "bear_value": {"type": "number", "description": "BEAR-case value per share"},
-                           "bear_prob": {"type": "number", "description": "BEAR-case probability, percent"}},
+                           "bear_prob": {"type": "number", "description": "BEAR-case probability, percent"},
+                           "base_value": {"type": "number", "description": "BASE-case value per share"},
+                           "base_prob": {"type": "number", "description": "BASE-case probability, percent"},
+                           "conviction": {"type": "string", "enum": CONVICTIONS}},
                           ["symbol", "rating", "expected_return_pct", "price", "price_date"])},
 ]
 
@@ -399,7 +444,8 @@ LEDGER = pathlib.Path(__file__).resolve().parent / "forecasts" / "ledger.jsonl"
 
 
 def record_forecast(symbol, rating, expected_return_pct, price, price_date, horizon_months=12,
-                    bull_value=None, bull_prob=None, bear_value=None, bear_prob=None):
+                    bull_value=None, bull_prob=None, bear_value=None, bear_prob=None,
+                    base_value=None, base_prob=None, conviction=None):
     sym = str(symbol).strip().upper()
     if not re.fullmatch(r"[A-Z0-9.\-]{1,12}", sym):
         raise ToolError(f"not a ticker: {symbol!r}")
@@ -410,11 +456,14 @@ def record_forecast(symbol, rating, expected_return_pct, price, price_date, hori
             raise ToolError(f"{what} must be a number")
     if price <= 0:
         raise ToolError("price must be above 0")
-    scen = {"bull_value": bull_value, "bull_prob": bull_prob, "bear_value": bear_value, "bear_prob": bear_prob}
+    if conviction is not None and conviction not in CONVICTIONS:
+        raise ToolError(f"conviction must be one of {CONVICTIONS}")
+    scen = {"bull_value": bull_value, "bull_prob": bull_prob, "base_value": base_value, "base_prob": base_prob,
+            "bear_value": bear_value, "bear_prob": bear_prob}
     for k, v in scen.items():
         if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0):
             raise ToolError(f"{k} must be a number, 0 or more")
-    for k in ("bull_prob", "bear_prob"):
+    for k in ("bull_prob", "base_prob", "bear_prob"):
         if scen[k] is not None and scen[k] > 100:
             raise ToolError(f"{k} is a percentage: at most 100")
     if bull_value is not None and bear_value is not None and bear_value > bull_value:
@@ -423,10 +472,13 @@ def record_forecast(symbol, rating, expected_return_pct, price, price_date, hori
         dt.date.fromisoformat(str(price_date))
     except ValueError as e:
         raise ToolError("price_date must be YYYY-MM-DD") from e
-    entry = {"date": dt.date.today().isoformat(), "symbol": sym, "rating": rating,
+    entry = {"date": _cutoff() or dt.date.today().isoformat(), "symbol": sym, "rating": rating,
              "expected_return_pct": float(expected_return_pct), "price": float(price),
              "price_date": str(price_date), "horizon_months": int(horizon_months),
-             **{k: float(v) for k, v in scen.items() if v is not None}}
+             **{k: float(v) for k, v in scen.items() if v is not None},
+             **({"conviction": conviction} if conviction else {})}
+    if _cutoff():
+        entry["backtest_as_of"] = _cutoff()
     LEDGER.parent.mkdir(exist_ok=True)
     with LEDGER.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")

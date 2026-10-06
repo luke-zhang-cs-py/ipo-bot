@@ -1,0 +1,735 @@
+{
+ "_about": "Golden set: fill in the real figures from each filing (full units, USD), the as-of date and the source you expect the bot to cite (a form type such as 10-Q, or an accession number). Entries with no figures filled in are skipped. For the IPOs, 'kit.py golden' runs the bot as of the day before listing (data tools limited to that date, no web search). The model may still remember these IPOs from training, so they test extraction, maths and citation, not foresight. See testkit/rubric.md for the scoring.",
+ "entries": [
+  {
+   "id": "G01",
+   "type": "listed",
+   "question": "Rate Apple Inc. (AAPL) stock over 12 months.",
+   "subject": {
+    "company": "Apple Inc.",
+    "ticker": "AAPL",
+    "exchange": "",
+    "share_class": "common"
+   },
+   "as_of": "",
+   "filing": "the latest 10-Q or 10-K (20-F / 6-K for foreign filers): form, period and link",
+   "expected": {
+    "price": null,
+    "diluted_shares": null,
+    "revenue": null,
+    "net_income": null,
+    "debt": null,
+    "cash": null
+   },
+   "expected_source": {
+    "price": "",
+    "diluted_shares": "10-Q",
+    "revenue": "10-Q",
+    "net_income": "10-Q",
+    "debt": "10-Q",
+    "cash": "10-Q"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G02",
+   "type": "listed",
+   "question": "Rate Microsoft Corporation (MSFT) stock over 12 months.",
+   "subject": {
+    "company": "Microsoft Corporation",
+    "ticker": "MSFT",
+    "exchange": "",
+    "share_class": "common"
+   },
+   "as_of": "",
+   "filing": "the latest 10-Q or 10-K (20-F / 6-K for foreign filers): form, period and link",
+   "expected": {
+    "price": null,
+    "diluted_shares": null,
+    "revenue": null,
+    "net_income": null,
+    "debt": null,
+    "cash": null
+   },
+   "expected_source": {
+    "price": "",
+    "diluted_shares": "10-Q",
+    "revenue": "10-Q",
+    "net_income": "10-Q",
+    "debt": "10-Q",
+    "cash": "10-Q"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G03",
+   "type": "listed",
+   "question": "Rate NVIDIA Corporation (NVDA) stock over 12 months.",
+   "subject": {
+    "company": "NVIDIA Corporation",
+    "ticker": "NVDA",
+    "exchange": "",
+    "share_class": "common"
+   },
+   "as_of": "",
+   "filing": "the latest 10-Q or 10-K (20-F / 6-K for foreign filers): form, period and link",
+   "expected": {
+    "price": null,
+    "diluted_shares": null,
+    "revenue": null,
+    "net_income": null,
+    "debt": null,
+    "cash": null
+   },
+   "expected_source": {
+    "price": "",
+    "diluted_shares": "10-Q",
+    "revenue": "10-Q",
+    "net_income": "10-Q",
+    "debt": "10-Q",
+    "cash": "10-Q"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G04",
+   "type": "listed",
+   "question": "Rate Alphabet Inc. (GOOGL) stock over 12 months.",
+   "subject": {
+    "company": "Alphabet Inc.",
+    "ticker": "GOOGL",
+    "exchange": "",
+    "share_class": "Class A (not GOOG, Class C)"
+   },
+   "as_of": "",
+   "filing": "the latest 10-Q or 10-K (20-F / 6-K for foreign filers): form, period and link",
+   "expected": {
+    "price": null,
+    "diluted_shares": null,
+    "revenue": null,
+    "net_income": null,
+    "debt": null,
+    "cash": null
+   },
+   "expected_source": {
+    "price": "",
+    "diluted_shares": "10-Q",
+    "revenue": "10-Q",
+    "net_income": "10-Q",
+    "debt": "10-Q",
+    "cash": "10-Q"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G05",
+   "type": "listed",
+   "question": "Rate Meta Platforms, Inc. (META) stock over 12 months.",
+   "subject": {
+    "company": "Meta Platforms, Inc.",
+    "ticker": "META",
+    "exchange": "",
+    "share_class": "Class A"
+   },
+   "as_of": "",
+   "filing": "the latest 10-Q or 10-K (20-F / 6-K for foreign filers): form, period and link",
+   "expected": {
+    "price": null,
+    "diluted_shares": null,
+    "revenue": null,
+    "net_income": null,
+    "debt": null,
+    "cash": null
+   },
+   "expected_source": {
+    "price": "",
+    "diluted_shares": "10-Q",
+    "revenue": "10-Q",
+    "net_income": "10-Q",
+    "debt": "10-Q",
+    "cash": "10-Q"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G06",
+   "type": "listed",
+   "question": "Rate Berkshire Hathaway Inc. (BRK.B) stock over 12 months.",
+   "subject": {
+    "company": "Berkshire Hathaway Inc.",
+    "ticker": "BRK.B",
+    "exchange": "",
+    "share_class": "Class B (not BRK.A)"
+   },
+   "as_of": "",
+   "filing": "the latest 10-Q or 10-K (20-F / 6-K for foreign filers): form, period and link",
+   "expected": {
+    "price": null,
+    "diluted_shares": null,
+    "revenue": null,
+    "net_income": null,
+    "debt": null,
+    "cash": null
+   },
+   "expected_source": {
+    "price": "",
+    "diluted_shares": "10-Q",
+    "revenue": "10-Q",
+    "net_income": "10-Q",
+    "debt": "10-Q",
+    "cash": "10-Q"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G07",
+   "type": "listed",
+   "question": "Rate JPMorgan Chase & Co. (JPM) stock over 12 months.",
+   "subject": {
+    "company": "JPMorgan Chase & Co.",
+    "ticker": "JPM",
+    "exchange": "",
+    "share_class": "common"
+   },
+   "as_of": "",
+   "filing": "the latest 10-Q or 10-K (20-F / 6-K for foreign filers): form, period and link",
+   "expected": {
+    "price": null,
+    "diluted_shares": null,
+    "revenue": null,
+    "net_income": null,
+    "debt": null,
+    "cash": null
+   },
+   "expected_source": {
+    "price": "",
+    "diluted_shares": "10-Q",
+    "revenue": "10-Q",
+    "net_income": "10-Q",
+    "debt": "10-Q",
+    "cash": "10-Q"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G08",
+   "type": "listed",
+   "question": "Rate Exxon Mobil Corporation (XOM) stock over 12 months.",
+   "subject": {
+    "company": "Exxon Mobil Corporation",
+    "ticker": "XOM",
+    "exchange": "",
+    "share_class": "common"
+   },
+   "as_of": "",
+   "filing": "the latest 10-Q or 10-K (20-F / 6-K for foreign filers): form, period and link",
+   "expected": {
+    "price": null,
+    "diluted_shares": null,
+    "revenue": null,
+    "net_income": null,
+    "debt": null,
+    "cash": null
+   },
+   "expected_source": {
+    "price": "",
+    "diluted_shares": "10-Q",
+    "revenue": "10-Q",
+    "net_income": "10-Q",
+    "debt": "10-Q",
+    "cash": "10-Q"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G09",
+   "type": "listed",
+   "question": "Rate Johnson & Johnson (JNJ) stock over 12 months.",
+   "subject": {
+    "company": "Johnson & Johnson",
+    "ticker": "JNJ",
+    "exchange": "",
+    "share_class": "common"
+   },
+   "as_of": "",
+   "filing": "the latest 10-Q or 10-K (20-F / 6-K for foreign filers): form, period and link",
+   "expected": {
+    "price": null,
+    "diluted_shares": null,
+    "revenue": null,
+    "net_income": null,
+    "debt": null,
+    "cash": null
+   },
+   "expected_source": {
+    "price": "",
+    "diluted_shares": "10-Q",
+    "revenue": "10-Q",
+    "net_income": "10-Q",
+    "debt": "10-Q",
+    "cash": "10-Q"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G10",
+   "type": "listed",
+   "question": "Rate The Coca-Cola Company (KO) stock over 12 months.",
+   "subject": {
+    "company": "The Coca-Cola Company",
+    "ticker": "KO",
+    "exchange": "",
+    "share_class": "common"
+   },
+   "as_of": "",
+   "filing": "the latest 10-Q or 10-K (20-F / 6-K for foreign filers): form, period and link",
+   "expected": {
+    "price": null,
+    "diluted_shares": null,
+    "revenue": null,
+    "net_income": null,
+    "debt": null,
+    "cash": null
+   },
+   "expected_source": {
+    "price": "",
+    "diluted_shares": "10-Q",
+    "revenue": "10-Q",
+    "net_income": "10-Q",
+    "debt": "10-Q",
+    "cash": "10-Q"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G11",
+   "type": "listed",
+   "question": "Rate Eli Lilly and Company (LLY) stock over 12 months.",
+   "subject": {
+    "company": "Eli Lilly and Company",
+    "ticker": "LLY",
+    "exchange": "",
+    "share_class": "common"
+   },
+   "as_of": "",
+   "filing": "the latest 10-Q or 10-K (20-F / 6-K for foreign filers): form, period and link",
+   "expected": {
+    "price": null,
+    "diluted_shares": null,
+    "revenue": null,
+    "net_income": null,
+    "debt": null,
+    "cash": null
+   },
+   "expected_source": {
+    "price": "",
+    "diluted_shares": "10-Q",
+    "revenue": "10-Q",
+    "net_income": "10-Q",
+    "debt": "10-Q",
+    "cash": "10-Q"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G12",
+   "type": "listed",
+   "question": "Rate Toyota Motor Corporation (TM) stock over 12 months.",
+   "subject": {
+    "company": "Toyota Motor Corporation",
+    "ticker": "TM",
+    "exchange": "",
+    "share_class": "ADR (check the ADR ratio)"
+   },
+   "as_of": "",
+   "filing": "the latest 10-Q or 10-K (20-F / 6-K for foreign filers): form, period and link",
+   "expected": {
+    "price": null,
+    "diluted_shares": null,
+    "revenue": null,
+    "net_income": null,
+    "debt": null,
+    "cash": null
+   },
+   "expected_source": {
+    "price": "",
+    "diluted_shares": "10-Q",
+    "revenue": "10-Q",
+    "net_income": "10-Q",
+    "debt": "10-Q",
+    "cash": "10-Q"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G13",
+   "type": "listed",
+   "question": "Rate ASML Holding N.V. (ASML) stock over 12 months.",
+   "subject": {
+    "company": "ASML Holding N.V.",
+    "ticker": "ASML",
+    "exchange": "",
+    "share_class": "New York registry shares"
+   },
+   "as_of": "",
+   "filing": "the latest 10-Q or 10-K (20-F / 6-K for foreign filers): form, period and link",
+   "expected": {
+    "price": null,
+    "diluted_shares": null,
+    "revenue": null,
+    "net_income": null,
+    "debt": null,
+    "cash": null
+   },
+   "expected_source": {
+    "price": "",
+    "diluted_shares": "10-Q",
+    "revenue": "10-Q",
+    "net_income": "10-Q",
+    "debt": "10-Q",
+    "cash": "10-Q"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G14",
+   "type": "listed",
+   "question": "Rate SAP SE (SAP) stock over 12 months.",
+   "subject": {
+    "company": "SAP SE",
+    "ticker": "SAP",
+    "exchange": "",
+    "share_class": "ADR (check the ADR ratio)"
+   },
+   "as_of": "",
+   "filing": "the latest 10-Q or 10-K (20-F / 6-K for foreign filers): form, period and link",
+   "expected": {
+    "price": null,
+    "diluted_shares": null,
+    "revenue": null,
+    "net_income": null,
+    "debt": null,
+    "cash": null
+   },
+   "expected_source": {
+    "price": "",
+    "diluted_shares": "10-Q",
+    "revenue": "10-Q",
+    "net_income": "10-Q",
+    "debt": "10-Q",
+    "cash": "10-Q"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G15",
+   "type": "listed",
+   "question": "Rate Shell plc (SHEL) stock over 12 months.",
+   "subject": {
+    "company": "Shell plc",
+    "ticker": "SHEL",
+    "exchange": "",
+    "share_class": "ADR (check the ADR ratio)"
+   },
+   "as_of": "",
+   "filing": "the latest 10-Q or 10-K (20-F / 6-K for foreign filers): form, period and link",
+   "expected": {
+    "price": null,
+    "diluted_shares": null,
+    "revenue": null,
+    "net_income": null,
+    "debt": null,
+    "cash": null
+   },
+   "expected_source": {
+    "price": "",
+    "diluted_shares": "10-Q",
+    "revenue": "10-Q",
+    "net_income": "10-Q",
+    "debt": "10-Q",
+    "cash": "10-Q"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G16",
+   "type": "ipo",
+   "question": "Using only what was public before it listed, rate the Arm Holdings plc IPO (ARM).",
+   "subject": {
+    "company": "Arm Holdings plc",
+    "ticker": "ARM",
+    "exchange": "",
+    "share_class": "check the prospectus cover"
+   },
+   "as_of": "the day before it listed (2023): fill in YYYY-MM-DD",
+   "filing": "the last S-1/A or F-1/A before pricing, and the 424B4: links",
+   "expected": {
+    "offer_price_low": null,
+    "offer_price_high": null,
+    "shares_offered": null,
+    "revenue": null,
+    "net_income": null
+   },
+   "expected_source": {
+    "offer_price_low": "S-1/A",
+    "offer_price_high": "S-1/A",
+    "shares_offered": "S-1/A",
+    "revenue": "S-1",
+    "net_income": "S-1"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G17",
+   "type": "ipo",
+   "question": "Using only what was public before it listed, rate the Maplebear Inc. (Instacart) IPO (CART).",
+   "subject": {
+    "company": "Maplebear Inc. (Instacart)",
+    "ticker": "CART",
+    "exchange": "",
+    "share_class": "check the prospectus cover"
+   },
+   "as_of": "the day before it listed (2023): fill in YYYY-MM-DD",
+   "filing": "the last S-1/A or F-1/A before pricing, and the 424B4: links",
+   "expected": {
+    "offer_price_low": null,
+    "offer_price_high": null,
+    "shares_offered": null,
+    "revenue": null,
+    "net_income": null
+   },
+   "expected_source": {
+    "offer_price_low": "S-1/A",
+    "offer_price_high": "S-1/A",
+    "shares_offered": "S-1/A",
+    "revenue": "S-1",
+    "net_income": "S-1"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G18",
+   "type": "ipo",
+   "question": "Using only what was public before it listed, rate the Birkenstock Holding plc IPO (BIRK).",
+   "subject": {
+    "company": "Birkenstock Holding plc",
+    "ticker": "BIRK",
+    "exchange": "",
+    "share_class": "check the prospectus cover"
+   },
+   "as_of": "the day before it listed (2023): fill in YYYY-MM-DD",
+   "filing": "the last S-1/A or F-1/A before pricing, and the 424B4: links",
+   "expected": {
+    "offer_price_low": null,
+    "offer_price_high": null,
+    "shares_offered": null,
+    "revenue": null,
+    "net_income": null
+   },
+   "expected_source": {
+    "offer_price_low": "S-1/A",
+    "offer_price_high": "S-1/A",
+    "shares_offered": "S-1/A",
+    "revenue": "S-1",
+    "net_income": "S-1"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G19",
+   "type": "ipo",
+   "question": "Using only what was public before it listed, rate the Klaviyo, Inc. IPO (KVYO).",
+   "subject": {
+    "company": "Klaviyo, Inc.",
+    "ticker": "KVYO",
+    "exchange": "",
+    "share_class": "check the prospectus cover"
+   },
+   "as_of": "the day before it listed (2023): fill in YYYY-MM-DD",
+   "filing": "the last S-1/A or F-1/A before pricing, and the 424B4: links",
+   "expected": {
+    "offer_price_low": null,
+    "offer_price_high": null,
+    "shares_offered": null,
+    "revenue": null,
+    "net_income": null
+   },
+   "expected_source": {
+    "offer_price_low": "S-1/A",
+    "offer_price_high": "S-1/A",
+    "shares_offered": "S-1/A",
+    "revenue": "S-1",
+    "net_income": "S-1"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G20",
+   "type": "ipo",
+   "question": "Using only what was public before it listed, rate the Reddit, Inc. IPO (RDDT).",
+   "subject": {
+    "company": "Reddit, Inc.",
+    "ticker": "RDDT",
+    "exchange": "",
+    "share_class": "check the prospectus cover"
+   },
+   "as_of": "the day before it listed (2024): fill in YYYY-MM-DD",
+   "filing": "the last S-1/A or F-1/A before pricing, and the 424B4: links",
+   "expected": {
+    "offer_price_low": null,
+    "offer_price_high": null,
+    "shares_offered": null,
+    "revenue": null,
+    "net_income": null
+   },
+   "expected_source": {
+    "offer_price_low": "S-1/A",
+    "offer_price_high": "S-1/A",
+    "shares_offered": "S-1/A",
+    "revenue": "S-1",
+    "net_income": "S-1"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G21",
+   "type": "ipo",
+   "question": "Using only what was public before it listed, rate the Astera Labs, Inc. IPO (ALAB).",
+   "subject": {
+    "company": "Astera Labs, Inc.",
+    "ticker": "ALAB",
+    "exchange": "",
+    "share_class": "check the prospectus cover"
+   },
+   "as_of": "the day before it listed (2024): fill in YYYY-MM-DD",
+   "filing": "the last S-1/A or F-1/A before pricing, and the 424B4: links",
+   "expected": {
+    "offer_price_low": null,
+    "offer_price_high": null,
+    "shares_offered": null,
+    "revenue": null,
+    "net_income": null
+   },
+   "expected_source": {
+    "offer_price_low": "S-1/A",
+    "offer_price_high": "S-1/A",
+    "shares_offered": "S-1/A",
+    "revenue": "S-1",
+    "net_income": "S-1"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G22",
+   "type": "ipo",
+   "question": "Using only what was public before it listed, rate the Rubrik, Inc. IPO (RBRK).",
+   "subject": {
+    "company": "Rubrik, Inc.",
+    "ticker": "RBRK",
+    "exchange": "",
+    "share_class": "check the prospectus cover"
+   },
+   "as_of": "the day before it listed (2024): fill in YYYY-MM-DD",
+   "filing": "the last S-1/A or F-1/A before pricing, and the 424B4: links",
+   "expected": {
+    "offer_price_low": null,
+    "offer_price_high": null,
+    "shares_offered": null,
+    "revenue": null,
+    "net_income": null
+   },
+   "expected_source": {
+    "offer_price_low": "S-1/A",
+    "offer_price_high": "S-1/A",
+    "shares_offered": "S-1/A",
+    "revenue": "S-1",
+    "net_income": "S-1"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G23",
+   "type": "ipo",
+   "question": "Using only what was public before it listed, rate the CoreWeave, Inc. IPO (CRWV).",
+   "subject": {
+    "company": "CoreWeave, Inc.",
+    "ticker": "CRWV",
+    "exchange": "",
+    "share_class": "check the prospectus cover"
+   },
+   "as_of": "the day before it listed (2025): fill in YYYY-MM-DD",
+   "filing": "the last S-1/A or F-1/A before pricing, and the 424B4: links",
+   "expected": {
+    "offer_price_low": null,
+    "offer_price_high": null,
+    "shares_offered": null,
+    "revenue": null,
+    "net_income": null
+   },
+   "expected_source": {
+    "offer_price_low": "S-1/A",
+    "offer_price_high": "S-1/A",
+    "shares_offered": "S-1/A",
+    "revenue": "S-1",
+    "net_income": "S-1"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G24",
+   "type": "ipo",
+   "question": "Using only what was public before it listed, rate the Circle Internet Group, Inc. IPO (CRCL).",
+   "subject": {
+    "company": "Circle Internet Group, Inc.",
+    "ticker": "CRCL",
+    "exchange": "",
+    "share_class": "check the prospectus cover"
+   },
+   "as_of": "the day before it listed (2025): fill in YYYY-MM-DD",
+   "filing": "the last S-1/A or F-1/A before pricing, and the 424B4: links",
+   "expected": {
+    "offer_price_low": null,
+    "offer_price_high": null,
+    "shares_offered": null,
+    "revenue": null,
+    "net_income": null
+   },
+   "expected_source": {
+    "offer_price_low": "S-1/A",
+    "offer_price_high": "S-1/A",
+    "shares_offered": "S-1/A",
+    "revenue": "S-1",
+    "net_income": "S-1"
+   },
+   "tolerance_pct": 1.0
+  },
+  {
+   "id": "G25",
+   "type": "ipo",
+   "question": "Using only what was public before it listed, rate the Figma, Inc. IPO (FIG).",
+   "subject": {
+    "company": "Figma, Inc.",
+    "ticker": "FIG",
+    "exchange": "",
+    "share_class": "check the prospectus cover"
+   },
+   "as_of": "the day before it listed (2025): fill in YYYY-MM-DD",
+   "filing": "the last S-1/A or F-1/A before pricing, and the 424B4: links",
+   "expected": {
+    "offer_price_low": null,
+    "offer_price_high": null,
+    "shares_offered": null,
+    "revenue": null,
+    "net_income": null
+   },
+   "expected_source": {
+    "offer_price_low": "S-1/A",
+    "offer_price_high": "S-1/A",
+    "shares_offered": "S-1/A",
+    "revenue": "S-1",
+    "net_income": "S-1"
+   },
+   "tolerance_pct": 1.0
+  }
+ ]
+}

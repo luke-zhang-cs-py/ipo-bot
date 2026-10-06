@@ -7,3 +7,5 @@ portfolio.json
 bench_data/
 bench_runs/
 forecasts/
+testkit/runs/
+testkit/history.jsonl

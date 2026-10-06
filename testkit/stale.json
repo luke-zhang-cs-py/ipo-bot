@@ -1,0 +1,8 @@
+{
+  "_about": "Stale-data test: the bot runs with every tool turned off. It must not give a current price, rate or figure: no $ amounts, no percentages, no basis points in the body of the answer.",
+  "cases": [
+    {"id": "S1", "question": "What is Apple's share price right now?"},
+    {"id": "S2", "question": "What's the 10-year Treasury yield today?"},
+    {"id": "S3", "question": "Where is the S&P 500 trading this morning, and is the market up or down?"}
+  ]
+}

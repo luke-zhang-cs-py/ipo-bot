@@ -1,0 +1,335 @@
+{
+ "entries": [
+  {
+   "company": "GreenVector Holdings Ltd",
+   "ticker": "GRVT",
+   "cik": "2078037",
+   "prospectus_date": "2026-07-01",
+   "as_of": "2026-06-30",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Bending Spoons S.p.A.",
+   "ticker": "BSP",
+   "cik": "2004711",
+   "prospectus_date": "2026-07-01",
+   "as_of": "2026-06-30",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Neutron Holdings, Inc.",
+   "ticker": "LIME",
+   "cik": "1699963",
+   "prospectus_date": "2026-07-02",
+   "as_of": "2026-07-01",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "ITG, Inc./DE/",
+   "ticker": "ITG",
+   "cik": "2110117",
+   "prospectus_date": "2026-07-02",
+   "as_of": "2026-07-01",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "SK hynix Inc.",
+   "ticker": "SKHY",
+   "cik": "2120882",
+   "prospectus_date": "2026-07-10",
+   "as_of": "2026-07-09",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "QumulusAI, Inc.",
+   "ticker": "QMLS",
+   "cik": "2084026",
+   "prospectus_date": "2026-07-15",
+   "as_of": "2026-07-14",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Standard Nuclear, Inc.",
+   "ticker": "STDN",
+   "cik": "2086716",
+   "prospectus_date": "2026-07-16",
+   "as_of": "2026-07-15",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Csquare, Inc.",
+   "ticker": "CSQR",
+   "cik": "2105398",
+   "prospectus_date": "2026-07-16",
+   "as_of": "2026-07-15",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Scribe Therapeutics, Inc.",
+   "ticker": "SCTX",
+   "cik": "1853921",
+   "prospectus_date": "2026-07-27",
+   "as_of": "2026-07-26",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Ionic Digital Inc.",
+   "ticker": "",
+   "cik": "2007691",
+   "prospectus_date": "2026-07-28",
+   "as_of": "2026-07-27",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "IMC Rare Earths Ltd",
+   "ticker": "IMC",
+   "cik": "2098395",
+   "prospectus_date": "2026-07-29",
+   "as_of": "2026-07-28",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Game Your Game Inc.",
+   "ticker": "GYGY",
+   "cik": "2111846",
+   "prospectus_date": "2026-07-29",
+   "as_of": "2026-07-28",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Reformation Inc.",
+   "ticker": "REF",
+   "cik": "1787117",
+   "prospectus_date": "2026-07-30",
+   "as_of": "2026-07-29",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Apnimed, Inc.",
+   "ticker": "APMD",
+   "cik": "1745648",
+   "prospectus_date": "2026-07-31",
+   "as_of": "2026-07-30",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Jersey Mike's Subs Inc.",
+   "ticker": "JMKE",
+   "cik": "2127043",
+   "prospectus_date": "2026-07-31",
+   "as_of": "2026-07-30",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Attovia Therapeutics, Inc.",
+   "ticker": "ATTO",
+   "cik": "2058707",
+   "prospectus_date": "2026-08-05",
+   "as_of": "2026-08-04",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Braveheart Bio, Inc.",
+   "ticker": "BRVE",
+   "cik": "2131524",
+   "prospectus_date": "2026-08-06",
+   "as_of": "2026-08-05",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Ticketplus Ltd.",
+   "ticker": "TP",
+   "cik": "2104296",
+   "prospectus_date": "2026-08-07",
+   "as_of": "2026-08-06",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Latigo Biotherapeutics, Inc.",
+   "ticker": "LTGO",
+   "cik": "2056611",
+   "prospectus_date": "2026-08-07",
+   "as_of": "2026-08-06",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "BlossomHill Therapeutics, Inc.",
+   "ticker": "BLSM",
+   "cik": "1839970",
+   "prospectus_date": "2026-08-07",
+   "as_of": "2026-08-06",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Advasa Holdings, Inc.",
+   "ticker": "ADBT",
+   "cik": "2084227",
+   "prospectus_date": "2026-08-12",
+   "as_of": "2026-08-11",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Vogenx, Inc.",
+   "ticker": "VOGX",
+   "cik": "1903784",
+   "prospectus_date": "2026-08-12",
+   "as_of": "2026-08-11",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "SunScout Holding Ltd",
+   "ticker": "SNSC",
+   "cik": "2101240",
+   "prospectus_date": "2026-08-13",
+   "as_of": "2026-08-12",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Londian Wason New Energy Tech Inc.",
+   "ticker": "",
+   "cik": "2006960",
+   "prospectus_date": "2026-08-14",
+   "as_of": "2026-08-13",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Lyntris Inc.",
+   "ticker": "LYNX",
+   "cik": "2132582",
+   "prospectus_date": "2026-08-19",
+   "as_of": "2026-08-18",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "First Breach, Inc.",
+   "ticker": "FBDT",
+   "cik": "1892704",
+   "prospectus_date": "2026-08-20",
+   "as_of": "2026-08-19",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Advance JV Group Ltd",
+   "ticker": "",
+   "cik": "2089447",
+   "prospectus_date": "2026-09-01",
+   "as_of": "2026-08-31",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Verdera Energy Corp.",
+   "ticker": "VUECF",
+   "cik": "2111453",
+   "prospectus_date": "2026-09-15",
+   "as_of": "2026-09-14",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Electra Therapeutics, Inc.",
+   "ticker": "ETRA",
+   "cik": "2088082",
+   "prospectus_date": "2026-09-18",
+   "as_of": "2026-09-17",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "Orion180 Insurance Group Inc.",
+   "ticker": "OIG",
+   "cik": "2124472",
+   "prospectus_date": "2026-09-21",
+   "as_of": "2026-09-20",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "RUI Holdings Inc",
+   "ticker": "",
+   "cik": "2094989",
+   "prospectus_date": "2026-09-24",
+   "as_of": "2026-09-23",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "ROZE AI INC.",
+   "ticker": "ROZE",
+   "cik": "2075335",
+   "prospectus_date": "2026-09-28",
+   "as_of": "2026-09-27",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  },
+  {
+   "company": "ADARx Pharmaceuticals, Inc.",
+   "ticker": "ADRX",
+   "cik": "1802369",
+   "prospectus_date": "2026-09-28",
+   "as_of": "2026-09-27",
+   "listing_date": null,
+   "offer_price": null,
+   "verified": false
+  }
+ ],
+ "_about": "IPOs for the no-hindsight backtest. 'as_of' is the day before the final prospectus (424B4), so the bot sees the price range but not the final price; its data tools are cut off at that date and web search is off. Only IPOs after the model's training cutoff (2026-06-30) are clean: for earlier ones the model may remember what happened. Fill in listing_date and offer_price from the 424B4 and set verified to true; unverified entries are run but not scored."
+}

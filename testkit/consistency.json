@@ -1,0 +1,10 @@
+{
+  "_about": "Consistency test: the same question several times plus reworded versions, each in a fresh conversation. Ratings must match and the key numbers stay within the tolerances. Claude Opus 5.5 does not accept a temperature setting (the API rejects it), so the default is the lowest available and this test measures the run-to-run spread at that setting.",
+  "question": "Rate Coca-Cola (KO) stock over 12 months.",
+  "repeats": 3,
+  "rewordings": [
+    "What's your 12-month view on Coca-Cola shares (NYSE: KO)? Give the rating and scenarios.",
+    "Give me your Overweight / Equal-weight / Underweight call on KO for the next year, with the numbers."
+  ],
+  "tolerance": {"pwv_pct": 5, "expected_return_pts": 3, "stop_working_pct": 5}
+}
