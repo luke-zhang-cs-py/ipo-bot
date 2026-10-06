@@ -46,6 +46,7 @@ def main(argv):
     picks = [int(a) for a in argv if a.isdigit()] or list(range(1, len(CASES) + 1))
     out = HERE / "stress_runs" / dt.datetime.now(BOSTON).strftime("%Y-%m-%d_%H%M%S")
     out.mkdir(parents=True)
+    tools.LEDGER = out / "ledger.jsonl"      # test forecasts stay out of the real forecast log
     failed = 0
     for n in picks:
         question, expect = CASES[n - 1]

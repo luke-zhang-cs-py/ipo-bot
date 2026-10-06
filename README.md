@@ -58,6 +58,26 @@ price, rating, conviction, which rule set the size), then the reasoning, then th
 trades. Prices come from the market-data API when `FMP_API_KEY` is set, otherwise from the file (with its
 date). Holdings over a limit get a TRIM with the number of shares over.
 
+## Benchmark against other prediction algorithms
+
+```bash
+python benchmark.py            # walk-forward on real prices: free, about a minute
+python benchmark.py --ledger   # and score the bot's own logged forecasts that have matured
+```
+
+Every month-end since 2009, five classic algorithms (12-1 momentum, 10-month trend, low volatility, the
+5-year historical mean, short-term reversal), a blend of three of them and a random control each rank 30 US
+large caps and 15 country ETFs using only the prices up to that day. Each ranking is then scored against the
+next 12 months and the next month: rank correlation (IC) with Newey-West t-statistics, top-minus-bottom-third
+return, the hit rate of the implied Overweight/Underweight calls, and the same IC over consecutive 3-year
+blocks so one lucky period cannot carry a result. A report is saved to `bench_runs/`.
+
+The bot is not backtested: the model already knows how those years went, so any past-date test would be
+contaminated. It is tested forward instead. Each rating it gives on a listed stock is logged to
+`forecasts/ledger.jsonl` (git-ignored) with the price and date, and `--ledger` scores each one once its 12
+months are up. The universes are today's survivors, which flatters long-only returns: compare the rows with
+each other, not with zero.
+
 ## Test
 
 ```bash
@@ -78,10 +98,11 @@ memos as well: the checks catch missing parts, not bad reasoning.
 |---|---|
 | `system_prompt.md` | The bot's instructions. Change the rating thresholds and the memo layout here. |
 | `ipo_bot.py` | The conversation loop: streaming, adaptive thinking at high effort, prompt caching, server-side fallback on a declined request. |
-| `tools.py` | EDGAR (lookup, filings, document text, XBRL financials), FRED, market data, a calculator for every number, and the two portfolio tools. |
+| `tools.py` | EDGAR (lookup, filings, document text, XBRL financials), FRED, market data, a calculator for every number, the two portfolio tools, and the forecast log. |
 | `portfolio.py` | Loads and checks your portfolio file, values it, finds rule breaches, and sizes a purchase by your rules. |
 | `checks.py` | The memo rules a script can check. |
 | `stress_test.py` | The 11 test questions, graded by `checks.py`. |
+| `benchmark.py` | Walk-forward tests of simple prediction algorithms, and scoring of the bot's logged forecasts. |
 
 ## Cost
 

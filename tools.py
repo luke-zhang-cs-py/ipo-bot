@@ -25,6 +25,7 @@ import urllib.request
 TIMEOUT = 25            # seconds per HTTP request
 MAX_RESULT_CHARS = 30_000
 DOC_CHUNK_CHARS = 25_000
+RATINGS = ["Overweight", "Equal-weight", "Underweight"]     # what record_forecast accepts
 
 
 class ToolError(Exception):
@@ -330,6 +331,13 @@ TOOL_DEFS = [
                            "conviction": {"type": "string", "enum": ["Low", "Medium", "High"]},
                            "sector": {"type": "string", "description": "For a stock not yet held, so the sector limit applies"}},
                           ["symbol", "entry_price", "stop_price", "conviction"])},
+    {"name": "record_forecast", "description": "Log a rating on a listed stock so it can be scored against simple algorithms when it matures. Call once per rated listed stock, after the rating is final, with the price the expected return was measured from.",
+     "input_schema": _obj({"symbol": {"type": "string"}, "rating": {"type": "string", "enum": RATINGS},
+                           "expected_return_pct": {"type": "number", "description": "e.g. 18.5 for +18.5%"},
+                           "price": {"type": "number", "description": "The price the expected return is measured from"},
+                           "price_date": {"type": "string", "description": "YYYY-MM-DD of that price"},
+                           "horizon_months": {"type": "integer", "description": "Default 12"}},
+                          ["symbol", "rating", "expected_return_pct", "price", "price_date"])},
 ]
 
 
@@ -380,9 +388,40 @@ def portfolio_size(symbol, entry_price, stop_price, conviction, sector=None):
     return _result("portfolio_size: the user's rules applied to the portfolio file", sized)
 
 
+# ----------------------------------------------------------------------------- forecast ledger
+
+# Each rating is logged so benchmark.py --ledger can score it against simple algorithms once it matures.
+LEDGER = pathlib.Path(__file__).resolve().parent / "forecasts" / "ledger.jsonl"
+
+
+def record_forecast(symbol, rating, expected_return_pct, price, price_date, horizon_months=12):
+    sym = str(symbol).strip().upper()
+    if not re.fullmatch(r"[A-Z0-9.\-]{1,12}", sym):
+        raise ToolError(f"not a ticker: {symbol!r}")
+    if rating not in RATINGS:
+        raise ToolError(f"rating must be one of {RATINGS}")
+    for v, what in ((expected_return_pct, "expected_return_pct"), (price, "price")):
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+            raise ToolError(f"{what} must be a number")
+    if price <= 0:
+        raise ToolError("price must be above 0")
+    try:
+        dt.date.fromisoformat(str(price_date))
+    except ValueError as e:
+        raise ToolError("price_date must be YYYY-MM-DD") from e
+    entry = {"date": dt.date.today().isoformat(), "symbol": sym, "rating": rating,
+             "expected_return_pct": float(expected_return_pct), "price": float(price),
+             "price_date": str(price_date), "horizon_months": int(horizon_months)}
+    LEDGER.parent.mkdir(exist_ok=True)
+    with LEDGER.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
+    return _result("forecasts/ledger.jsonl", entry, "logged; score it later with benchmark.py --ledger")
+
+
 HANDLERS = {"edgar_lookup": edgar_lookup, "edgar_filings": edgar_filings, "edgar_document": edgar_document,
             "edgar_financials": edgar_financials, "fred_series": fred_series, "market_data": market_data,
-            "calculate": calculate, "portfolio_view": portfolio_view, "portfolio_size": portfolio_size}
+            "calculate": calculate, "portfolio_view": portfolio_view, "portfolio_size": portfolio_size,
+            "record_forecast": record_forecast}
 
 
 def validate(name, args):
