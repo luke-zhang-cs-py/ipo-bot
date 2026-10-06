@@ -211,3 +211,16 @@ def test_financials_say_how_long_each_period_is(monkeypatch):
     rows = json.loads(text)["data"]["Revenues (USD)"]
     assert not err and sorted(r["period_days"] for r in rows) == [91, 273], "a year-to-date and a quarter, told apart"
     assert all(r["form"] == "10-Q" for r in rows), "only periodic reports and registration statements"
+
+
+def test_env_file_fills_unset_variables_only(tmp_path, monkeypatch):
+    f = tmp_path / ".env"
+    f.write_text('# comment\nSEC_USER_AGENT="A Person a@example.com"\nFRED_API_KEY=abc\nEMPTY=\nnot a line\n', encoding="utf-8")
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    monkeypatch.setenv("FRED_API_KEY", "already-set")
+    monkeypatch.delenv("EMPTY", raising=False)
+    ipo_bot.load_env(f)
+    import os
+    assert os.environ["SEC_USER_AGENT"] == "A Person a@example.com"
+    assert os.environ["FRED_API_KEY"] == "already-set", "the environment wins over the file"
+    assert "EMPTY" not in os.environ

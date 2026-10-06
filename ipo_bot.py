@@ -22,9 +22,30 @@ try:
 except ImportError:
     pass
 
-from tools import TOOL_DEFS, run_tool
-
 HERE = pathlib.Path(__file__).resolve().parent
+
+
+def load_env(path=HERE / ".env"):
+    """KEY=value lines from .env into the environment; a variable already set wins. No other syntax."""
+    import os
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = (s.strip() for s in line.split("=", 1))
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if key and value and key not in os.environ:
+            os.environ[key] = value
+
+
+load_env()
+
+from tools import TOOL_DEFS, run_tool  # noqa: E402
 MODEL = "claude-opus-5-5"
 # Opus 5.5 can decline a request; "default" re-runs a declined request on the fallback Anthropic
 # recommends for that category, inside the same call.
