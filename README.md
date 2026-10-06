@@ -62,6 +62,7 @@ date). Holdings over a limit get a TRIM with the number of shares over.
 
 ```bash
 python -m pytest -q tests          # offline, free: tools, checks and the loop against a stand-in client
+IPO_BOT_LIVE=1 python -m pytest -q tests/test_live_market.py   # live, free: real SEC filings, portfolio rules on today's prices
 python stress_test.py --yes        # the 11 stress-test questions, live: costs API credit
 python stress_test.py --yes 2 4    # just some of them
 ```

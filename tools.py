@@ -92,21 +92,31 @@ def edgar_filings(cik, forms=None, limit=20):
     """Recent filings, optionally only some form types (e.g. ["S-1", "S-1/A", "424B4"])."""
     url = f"https://data.sec.gov/submissions/CIK{_cik10(cik)}.json"
     sub = json.loads(_get(url, _sec_headers()))
-    recent = sub.get("filings", {}).get("recent", {})
     want = {f.upper() for f in (forms or [])}
+    limit = max(1, min(int(limit), 100))
     out = []
-    for i, form in enumerate(recent.get("form", [])):
-        if want and form.upper() not in want:
-            continue
-        acc = recent["accessionNumber"][i]
-        doc = recent["primaryDocument"][i]
-        out.append({
-            "form": form, "filed": recent["filingDate"][i], "report_date": recent.get("reportDate", [""] * (i + 1))[i],
-            "accession": acc,
-            "url": f"https://www.sec.gov/Archives/edgar/data/{int(_cik10(cik))}/{acc.replace('-', '')}/{doc}",
-        })
-        if len(out) >= max(1, min(int(limit), 100)):
+
+    def take(cols):
+        for i, form in enumerate(cols.get("form", [])):
+            if want and form.upper() not in want:
+                continue
+            acc = cols["accessionNumber"][i]
+            doc = cols["primaryDocument"][i]
+            out.append({
+                "form": form, "filed": cols["filingDate"][i], "report_date": (cols.get("reportDate") or [""] * (i + 1))[i],
+                "accession": acc,
+                "url": f"https://www.sec.gov/Archives/edgar/data/{int(_cik10(cik))}/{acc.replace('-', '')}/{doc}",
+            })
+            if len(out) >= limit:
+                return
+
+    take(sub.get("filings", {}).get("recent", {}))
+    # "recent" holds only the latest ~1,000 filings. A company that files many insider forms pushes its
+    # S-1 out of it within months, so a form search goes on through the older pages.
+    for page in sub.get("filings", {}).get("files", []) if want else []:
+        if len(out) >= limit:
             break
+        take(json.loads(_get(f"https://data.sec.gov/submissions/{page['name']}", _sec_headers())))
     return _result(url, {"company": sub.get("name"), "tickers": sub.get("tickers"), "filings": out})
 
 
