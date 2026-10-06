@@ -70,7 +70,9 @@ Every month-end since 2009, five classic algorithms (12-1 momentum, 10-month tre
 large caps and 15 country ETFs using only the prices up to that day. Each ranking is then scored against the
 next 12 months and the next month: rank correlation (IC) with Newey-West t-statistics, top-minus-bottom-third
 return, the hit rate of the implied Overweight/Underweight calls, and the same IC over consecutive 3-year
-blocks so one lucky period cannot carry a result. A report is saved to `bench_runs/`.
+blocks so one lucky period cannot carry a result. Each algorithm's IC is also tested against its own luck range: its
+scores handed to the wrong stocks, 200 times, which keeps how slowly the signal changes. Trust "Beyond luck?"
+over the t-statistic, which runs a little hot on universes this small. A report is saved to `bench_runs/`.
 
 The bot is not backtested: the model already knows how those years went, so any past-date test would be
 contaminated. It is tested forward instead. Each rating it gives on a listed stock is logged to
@@ -81,7 +83,7 @@ each other, not with zero.
 ## Calibration
 
 ```bash
-python calibration.py            # about 4 minutes: includes 40 random re-runs per test as the luck baseline
+python calibration.py            # several minutes: 40 permutation runs per algorithm as the luck baseline
 python calibration.py --ledger   # and the bot's own matured forecasts
 ```
 
@@ -91,8 +93,8 @@ universes (US large caps, country ETFs, and the nine US sector ETFs, which have 
 reports the stock-against-stock calibration slope (1 = forecast gaps came true in full), out-of-sample R2,
 Brier skill, calibration error, range coverage, a market-level check shared by every algorithm, the same
 slope over consecutive 3-year blocks, and what the bot's +15%/-10% rating thresholds delivered on top of each
-algorithm. Every score is compared with 40 re-runs of the random control: `*` marks better than luck, `!`
-worse. For the bot, it also checks how often its bull and bear cases came true against the probabilities
+algorithm. Every score is compared with 40 runs of the same algorithm's scores handed to the wrong stocks:
+`*` marks better than luck, `!` worse. For the bot, it also checks how often its bull and bear cases came true against the probabilities
 it gave them.
 
 ## Test

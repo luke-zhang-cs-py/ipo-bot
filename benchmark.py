@@ -167,7 +167,8 @@ def max_drawdown(curve):
 
 # ----------------------------------------------------------------------------- the walk-forward test
 
-def run(universe, refresh=False, seed=7):
+def run(universe, refresh=False, seed=7, keep=None):
+    """keep: a dict to fill with every month's scores and outcomes, for the permutation test."""
     symbols = UNIVERSES[universe]
     months, px = panel(symbols, refresh)
     names = list(ALGORITHMS) + ["Blend (mom+trend+lowvol)", "Random (no skill)"]
@@ -177,10 +178,14 @@ def run(universe, refresh=False, seed=7):
         raw = {a: [f(px[s], i) for s in symbols] for a, f in ALGORITHMS.items()}
         raw["Blend (mom+trend+lowvol)"] = blend(raw)
         raw["Random (no skill)"] = [rng.random() for _ in symbols]
+        if keep is not None:
+            keep.setdefault("raw", {})[i] = raw
         for h in (1, 12):
             if i + h >= len(months):
                 continue
             fwd = [px[s][i + h] / px[s][i] - 1 for s in symbols]
+            if keep is not None:
+                keep.setdefault(h, {})[i] = fwd
             avg = statistics.fmean(fwd)
             med = statistics.median(fwd)
             for a in names:
@@ -196,6 +201,26 @@ def run(universe, refresh=False, seed=7):
                     "top_ret": statistics.fmean(fwd[k] for k in top), "all_ret": avg,
                 })
     return months, per
+
+
+LUCK_SEEDS = 200
+
+
+def luck_band(keep, algo, h, seeds=LUCK_SEEDS):
+    """The middle 95% of mean rank IC when the algorithm's own scores are handed to the wrong stocks (one fixed
+    swap per run). The swap keeps how slowly the signal changes, which matters: a slow signal over overlapping
+    12-month windows swings much more by chance than a ranking redrawn every month, and Newey-West t runs
+    a little hot on these small universes too. This is the bar that counts."""
+    months = sorted(keep[h])
+    n = len(keep[h][months[0]])
+    rng = random.Random(1000)
+    means = []
+    for _ in range(seeds):
+        perm = list(range(n))
+        rng.shuffle(perm)
+        means.append(statistics.fmean(spearman([keep["raw"][i][algo][k] for k in perm], keep[h][i]) for i in months))
+    means.sort()
+    return means[round(0.025 * (seeds - 1))], means[round(0.975 * (seeds - 1))]
 
 
 def summary(per, h):
@@ -280,22 +305,26 @@ def score_ledger(refresh=False):
 # ----------------------------------------------------------------------------- report
 
 def pct(x, d=1):
-    return f"{100 * x:+.{d}f}%"
+    text = f"{100 * x:+.{d}f}%"
+    return text[1:] if float(text[:-1]) == 0 else text      # no "-0.0%" from rounding
 
 
 def report(refresh=False, ledger=False):
     out = [f"# Prediction benchmark, {dt.date.today():%d %b %Y}", ""]
     for uni in UNIVERSES:
-        months, per = run(uni, refresh)
+        keep = {}
+        months, per = run(uni, refresh, keep=keep)
         out += [f"## {uni} ({len(UNIVERSES[uni])} names, predictions every month-end "
                 f"{per[1][next(iter(per[1]))][0]['month']} to {per[1][next(iter(per[1]))][-1]['month']})", ""]
         for h in (12, 1):
             out += [f"### {h}-month horizon ({len(next(iter(per[h].values())))} consecutive tests)", "",
-                    "| Algorithm | Rank IC | t | Months IC > 0 | Top - bottom third | t | Rating hit rate |",
-                    "|---|---:|---:|---:|---:|---:|---:|"]
+                    "| Algorithm | Rank IC | IC from luck (95%) | Beyond luck? | t | Months IC > 0 | Top - bottom third | t | Rating hit rate |",
+                    "|---|---:|---:|---|---:|---:|---:|---:|---:|"]
             for r in summary(per, h):
-                out.append(f"| {r['algo']} | {r['ic']:+.3f} | {r['ic_t']:+.1f} | {100 * r['ic_pos']:.0f}% | "
-                           f"{pct(r['spread'])} | {r['spread_t']:+.1f} | {100 * r['hit']:.1f}% |")
+                lo, hi = luck_band(keep, r["algo"], h)
+                verdict = "yes, better" if r["ic"] > hi else "yes, worse" if r["ic"] < lo else "no"
+                out.append(f"| {r['algo']} | {r['ic']:+.3f} | {lo:+.3f} to {hi:+.3f} | {verdict} | {r['ic_t']:+.1f} | "
+                           f"{100 * r['ic_pos']:.0f}% | {pct(r['spread'])} | {r['spread_t']:+.1f} | {100 * r['hit']:.1f}% |")
             labels, b = blocks(per, h)
             out += ["", f"Rank IC in consecutive {BLOCK_YEARS}-year blocks ({h}-month horizon):", "",
                     "| Algorithm | " + " | ".join(labels) + " | Blocks > 0 |",
@@ -311,7 +340,11 @@ def report(refresh=False, ledger=False):
     out += ["## How to read this", "",
             "- **Rank IC**: correlation between the predicted order and the order that happened, each month. "
             "0 is no skill; +0.05 is respectable for a stock signal; random scores near 0.",
-            "- **t**: how sure we can be the average is not luck. Above about 2 counts; overlapping 12-month windows are allowed for.",
+            "- **Beyond luck?**: whether the rank IC falls outside what the same algorithm's scores, handed to the "
+            "wrong stocks, produced in 95% of 200 runs. Each algorithm gets its own range because slow signals swing "
+            "more by chance. This is the test to trust; any row, Random included, lands outside by chance 1 time in 20.",
+            "- **t**: Newey-West, allowing for overlapping windows. It runs a little hot on these small universes "
+            "(|t| > 2 in up to 10% of random runs), so read it alongside Beyond luck.",
             "- **Rating hit rate**: the top third read as Overweight, the bottom third as Underweight. The share of those "
             "calls on the right side of the median. 50% is a coin.",
             "- **Blocks**: the same test in consecutive periods. A signal that only worked in one block is fragile.",

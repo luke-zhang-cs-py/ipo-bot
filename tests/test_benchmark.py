@@ -96,3 +96,15 @@ def test_the_ledger_scores_matured_forecasts_and_lists_pending(tmp_path, monkeyp
 def test_the_stress_test_keeps_its_forecasts_out_of_the_real_ledger():
     src = (pathlib.Path(__file__).resolve().parents[1] / "stress_test.py").read_text(encoding="utf-8")
     assert 'tools.LEDGER = out / "ledger.jsonl"' in src
+
+
+def test_the_luck_band_is_wider_for_a_slow_signal(monkeypatch):
+    months, px = fake_panel(n_months=150)
+    monkeypatch.setitem(benchmark.UNIVERSES, "fake", list(px))
+    monkeypatch.setattr(benchmark, "panel", lambda symbols, refresh=False: (months, px))
+    keep = {}
+    benchmark.run("fake", keep=keep)
+    slow = benchmark.luck_band(keep, "Historical mean", 12, seeds=60)
+    fast = benchmark.luck_band(keep, "Random (no skill)", 12, seeds=60)
+    assert slow[0] < 0 < slow[1] and fast[0] < 0 < fast[1]
+    assert slow[1] - slow[0] > 1.5 * (fast[1] - fast[0])

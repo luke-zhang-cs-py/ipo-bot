@@ -87,64 +87,75 @@ def fit_line(xs, ys):
 
 # ----------------------------------------------------------------------------- the walk-forward forecasts
 
-def forecasts(months, px, symbols, h, seed=7, random_only=False):
-    """For every algorithm: one record per (month-end, stock) with the forecasts made then and what happened.
-    random_only: just the random control, for the null test."""
+def prepare(months, px, symbols, h, seed=7):
+    """Every algorithm's ranking, each stock's volatility, and what happened, at every month-end."""
     rng = random.Random(seed)
     idx = list(range(bm.LOOKBACK, len(months) - h))
     pos, vol, real, beat = {}, {}, {}, {}
     for i in idx:
-        raw = {} if random_only else {a: [f(px[s], i) for s in symbols] for a, f in bm.ALGORITHMS.items()}
-        if not random_only:
-            raw[BLEND] = bm.blend(raw)
+        raw = {a: [f(px[s], i) for s in symbols] for a, f in bm.ALGORITHMS.items()}
+        raw[BLEND] = bm.blend(raw)
         raw[RANDOM] = [rng.random() for _ in symbols]
         pos[i] = {a: positions(v) for a, v in raw.items()}
         vol[i] = [statistics.pstdev([px[s][k] / px[s][k - 1] - 1 for k in range(i - 35, i + 1)]) for s in symbols]
         real[i] = [px[s][i + h] / px[s][i] - 1 for s in symbols]
         med = statistics.median(real[i])
         beat[i] = [1 if y > med else 0 for y in real[i]]
+    return {"months": months, "h": h, "idx": idx, "pos": pos, "vol": vol, "real": real, "beat": beat}
 
-    out = {}
-    for a in pos[idx[0]]:
-        line, naive = Line(), Line()
-        bins = [[0, 0] for _ in range(BINS)]
-        base = [0, 0]
-        resid = []
-        recs, trained = [], 0
-        nxt = 0                                   # the next month-end whose outcome is not yet in the training set
-        for i in idx:
-            while nxt < len(idx) and idx[nxt] + h <= i:     # outcomes known by month i, and only those
-                j = idx[nxt]
-                ca, cb = line.coef()
-                for x, y, w in zip(pos[j][a], real[j], beat[j]):
-                    bisect.insort(resid, y - (ca + cb * x))
-                    line.add(x, y)
-                    naive.add(0.0, y)
-                    b = min(BINS - 1, int((x + 0.5) * BINS))
-                    bins[b][0] += w
-                    bins[b][1] += 1
-                    base[0] += w
-                    base[1] += 1
-                nxt += 1
-                trained += 1
-            if trained < MIN_TRAIN_DATES:
-                continue
+
+def walk(prep, a, perm=None, ranges=True):
+    """One algorithm's forecasts, month by month, each fitted only on outcomes known by then.
+    perm: give the algorithm's scores to other stocks (the same swap every month), for the permutation test.
+    ranges=False skips the ranges, which the permutation test does not score."""
+    months, h, idx = prep["months"], prep["h"], prep["idx"]
+    real, beat, vol = prep["real"], prep["beat"], prep["vol"]
+    pos = {i: ([prep["pos"][i][a][k] for k in perm] if perm else prep["pos"][i][a]) for i in idx}
+    line, naive = Line(), Line()
+    bins = [[0, 0] for _ in range(BINS)]
+    base = [0, 0]
+    resid = []
+    recs, trained = [], 0
+    nxt = 0                                   # the next month-end whose outcome is not yet in the training set
+    for i in idx:
+        while nxt < len(idx) and idx[nxt] + h <= i:     # outcomes known by month i, and only those
+            j = idx[nxt]
             ca, cb = line.coef()
-            mean_all = naive.sy / naive.n
-            clim = (base[0] + 1) / (base[1] + 2)
-            for k, x in enumerate(pos[i][a]):
-                f = ca + cb * x
+            for x, y, w in zip(pos[j], real[j], beat[j]):
+                if ranges:
+                    bisect.insort(resid, y - (ca + cb * x))
+                line.add(x, y)
+                naive.add(0.0, y)
                 b = min(BINS - 1, int((x + 0.5) * BINS))
+                bins[b][0] += w
+                bins[b][1] += 1
+                base[0] += w
+                base[1] += 1
+            nxt += 1
+            trained += 1
+        if trained < MIN_TRAIN_DATES:
+            continue
+        ca, cb = line.coef()
+        mean_all = naive.sy / naive.n
+        clim = (base[0] + 1) / (base[1] + 2)
+        for k, x in enumerate(pos[i]):
+            f = ca + cb * x
+            b = min(BINS - 1, int((x + 0.5) * BINS))
+            rec = {"month": months[i], "f": f, "naive": mean_all, "y": real[i][k],
+                   "p": (bins[b][0] + 1) / (bins[b][1] + 2), "clim": clim, "beat": beat[i][k]}
+            if ranges:
                 sd = vol[i][k] * math.sqrt(h)
-                recs.append({
-                    "month": months[i], "f": f, "naive": mean_all, "y": real[i][k],
-                    "p": (bins[b][0] + 1) / (bins[b][1] + 2), "clim": clim, "beat": beat[i][k],
-                    "ranges": {c: (f + quantile(resid, lo), f + quantile(resid, hi)) for c, (lo, hi) in RANGES.items()},
-                    "normal80": (f - Z80 * sd, f + Z80 * sd),
-                })
-        demean(recs)
-        out[a] = recs
-    return out
+                rec["ranges"] = {c: (f + quantile(resid, lo), f + quantile(resid, hi)) for c, (lo, hi) in RANGES.items()}
+                rec["normal80"] = (f - Z80 * sd, f + Z80 * sd)
+            recs.append(rec)
+    demean(recs)
+    return recs
+
+
+def forecasts(months, px, symbols, h, seed=7):
+    """For every algorithm: one record per (month-end, stock) with the forecasts made then and what happened."""
+    prep = prepare(months, px, symbols, h, seed)
+    return {a: walk(prep, a) for a in prep["pos"][prep["idx"][0]]}
 
 
 def demean(recs):
@@ -165,11 +176,33 @@ NULL_SEEDS = 40
 NULL_KEYS = ("slope", "r2_os", "bss", "ece")
 
 
-def null_band(months, px, symbols, h, seeds=NULL_SEEDS):
-    """What luck alone produces: the random control re-run with many seeds; the middle 95% of each score."""
-    runs = [score(forecasts(months, px, symbols, h, seed=100 + k, random_only=True)[RANDOM]) for k in range(seeds)]
-    return {key: (quantile(sorted(r[key] for r in runs), 0.025), quantile(sorted(r[key] for r in runs), 0.975))
-            for key in NULL_KEYS}
+def core_scores(recs):
+    """The scores the permutation test compares: no ranges."""
+    _, slope = fit_line([r["fx"] for r in recs], [r["yx"] for r in recs])
+    sse = sum((r["y"] - r["f"]) ** 2 for r in recs)
+    sse0 = sum((r["y"] - r["naive"]) ** 2 for r in recs)
+    brier = statistics.fmean((r["p"] - r["beat"]) ** 2 for r in recs)
+    brier0 = statistics.fmean((r["clim"] - r["beat"]) ** 2 for r in recs)
+    return {"slope": slope, "r2_os": 1 - sse / sse0 if sse0 else float("nan"),
+            "bss": 1 - brier / brier0 if brier0 else float("nan"),
+            "ece": ece([r["p"] for r in recs], [r["beat"] for r in recs])}
+
+
+def null_bands(prep, seeds=NULL_SEEDS):
+    """Per algorithm, what luck alone gives: its own scores handed to the wrong stocks (one fixed swap per run),
+    which keeps how slowly the signal changes and breaks only its link to the returns. The middle 95%."""
+    n = len(prep["real"][prep["idx"][0]])
+    out = {}
+    for a in prep["pos"][prep["idx"][0]]:
+        rng = random.Random(500)
+        runs = []
+        for _ in range(seeds):
+            perm = list(range(n))
+            rng.shuffle(perm)
+            runs.append(core_scores(walk(prep, a, perm=perm, ranges=False)))
+        out[a] = {k: (quantile(sorted(r[k] for r in runs), 0.025), quantile(sorted(r[k] for r in runs), 0.975))
+                  for k in NULL_KEYS}
+    return out
 
 
 def outside(value, band, better_high=True):
@@ -300,7 +333,8 @@ def ledger_calibration(refresh=False):
 # ----------------------------------------------------------------------------- report
 
 def pct(x, d=1):
-    return f"{100 * x:+.{d}f}%"
+    text = f"{100 * x:+.{d}f}%"
+    return text[1:] if float(text[:-1]) == 0 else text      # no "-0.0%" from rounding
 
 
 def report(refresh=False, ledger=False):
@@ -312,25 +346,24 @@ def report(refresh=False, ledger=False):
         months, px = bm.panel(symbols, refresh)
         out += [f"## {uni} ({len(symbols)} names)", ""]
         for h in HORIZONS:
-            per = forecasts(months, px, symbols, h)
+            prep = prepare(months, px, symbols, h)
+            per = {a: walk(prep, a) for a in prep["pos"][prep["idx"][0]]}
             scores = {a: score(r) for a, r in per.items()}
-            band = null_band(months, px, symbols, h)
+            bands = null_bands(prep)
             span = f"{per[RANDOM][0]['month']} to {per[RANDOM][-1]['month']}"
             n_tests = len({r["month"] for r in per[RANDOM]})
             out += [f"### {h}-month forecasts ({n_tests} consecutive month-ends, {span}; "
                     f"{scores[RANDOM]['n']:,} stock forecasts per algorithm)", "",
-                    "| Algorithm | Slope, stock vs stock | OOS R2 | Brier skill | ECE | 50% range | 80% range | 90% range | 80% normal-vol |",
-                    "|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
+                    "| Algorithm | Slope, stock vs stock | OOS R2 | OOS R2 from luck | Brier skill | ECE | 50% range | 80% range | 90% range | 80% normal-vol |",
+                    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
             for a, s in sorted(scores.items(), key=lambda kv: -kv[1]["r2_os"]):
-                c = s["cover"]
+                c, band = s["cover"], bands[a]
                 out.append(f"| {a} | {s['slope']:.2f}{outside(s['slope'], band['slope'])} | "
                            f"{pct(s['r2_os'], 2)}{outside(s['r2_os'], band['r2_os'])} | "
+                           f"{pct(band['r2_os'][0], 2)} to {pct(band['r2_os'][1], 2)} | "
                            f"{pct(s['bss'], 2)}{outside(s['bss'], band['bss'])} | "
                            f"{100 * s['ece']:.1f} pts{outside(s['ece'], band['ece'], better_high=False)} | "
                            f"{100 * c[50]:.0f}% | {100 * c[80]:.0f}% | {100 * c[90]:.0f}% | {100 * s['normal80']:.0f}% |")
-            out.append(f"| *Luck alone, middle 95% of {NULL_SEEDS} random runs* | {band['slope'][0]:.2f} to {band['slope'][1]:.2f} | "
-                       f"{pct(band['r2_os'][0], 2)} to {pct(band['r2_os'][1], 2)} | {pct(band['bss'][0], 2)} to "
-                       f"{pct(band['bss'][1], 2)} | {100 * band['ece'][0]:.1f} to {100 * band['ece'][1]:.1f} pts | | | | |")
             m = market_level(per[RANDOM])
             out += ["", f"Market level (shared by every algorithm: the running average of past returns): forecast "
                     f"{pct(m['f'])} on average, realised {pct(m['y'])}; slope {m['slope']:.2f}; direction right in "
@@ -361,7 +394,9 @@ def report(refresh=False, ledger=False):
             "against the month's average. 1 = the gaps forecast between stocks came true in full; between 0 and 1 = "
             "right direction, too confident; 0 or below = the forecast gaps say nothing or point the wrong way. "
             "Random should sit near 0, with noise.",
-            "- **Marks**: `*` = better than 97.5% of random runs; `!` = worse than 97.5% of them. Anything "
+            "- **Marks**: `*` = better than 97.5% of permutation runs; `!` = worse than 97.5% of them. Each "
+            "algorithm gets its own luck baseline: its scores handed to the wrong stocks (one fixed swap per run, "
+            "40 runs), which keeps how slowly the signal changes. Anything "
             "unmarked is within what luck produces on this universe and period.",
             "- **Market level**: the part of every forecast that is the same for all stocks that month. A slope "
             "below 0 means good past years were followed by weaker ones.",
