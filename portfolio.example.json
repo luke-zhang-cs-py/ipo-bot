@@ -1,0 +1,17 @@
+{
+  "_note": "ILLUSTRATIVE ONLY: placeholder tickers and made-up numbers. Copy to portfolio.json (git-ignored) and put in your own.",
+  "as_of": "2026-10-06",
+  "cash": 4000,
+  "holdings": [
+    {"symbol": "AAA", "shares": 20, "cost_basis": 150.0, "sector": "Technology", "price": 180.0, "price_date": "2026-10-06"},
+    {"symbol": "BBB", "shares": 40, "cost_basis": 60.0, "sector": "Financials", "price": 55.0, "price_date": "2026-10-06"},
+    {"symbol": "CCC", "shares": 15, "cost_basis": 90.0, "sector": "Health Care", "price": 100.0, "price_date": "2026-10-06"}
+  ],
+  "rules": {
+    "max_position_pct": 25,
+    "max_sector_pct": 40,
+    "risk_per_trade_pct": 1,
+    "min_cash_pct": 5,
+    "conviction_scale": {"Low": 0.5, "Medium": 1, "High": 1.5}
+  }
+}

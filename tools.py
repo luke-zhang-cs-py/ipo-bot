@@ -16,6 +16,7 @@ import json
 import math
 import operator
 import os
+import pathlib
 import re
 import urllib.error
 import urllib.parse
@@ -311,11 +312,67 @@ TOOL_DEFS = [
     {"name": "calculate", "description": "Evaluate arithmetic exactly. Use for every calculation. Pass named inputs in variables, e.g. expression 'price * shares', variables {price: 21.5, shares: 410000000}.",
      "input_schema": _obj({"expression": {"type": "string"},
                            "variables": {"type": "object", "additionalProperties": {"type": "number"}}}, ["expression"])},
+    {"name": "portfolio_view", "description": "The user's portfolio (portfolio mode only): each holding's price and its source, value, weight, gain, sector weights, cash, the user's rules, and any rule already breached.",
+     "input_schema": _obj({}, [])},
+    {"name": "portfolio_size", "description": "Shares to buy under the user's own rules (portfolio mode only). Give the entry price, your stop-working price and your conviction; returns shares, cost, loss at the stop, weight after, cash after, and which rule set the limit. Use this number; never size a trade any other way.",
+     "input_schema": _obj({"symbol": {"type": "string"}, "entry_price": {"type": "number"},
+                           "stop_price": {"type": "number", "description": "The stop-working price; below the entry"},
+                           "conviction": {"type": "string", "enum": ["Low", "Medium", "High"]},
+                           "sector": {"type": "string", "description": "For a stock not yet held, so the sector limit applies"}},
+                          ["symbol", "entry_price", "stop_price", "conviction"])},
 ]
+
+
+# ----------------------------------------------------------------------------- portfolio mode
+
+# Set by ipo_bot.py from --portfolio. The model never names a file: these two tools read this one only.
+PORTFOLIO = {"path": None}
+
+
+def _live_quote(symbol):
+    """(price, source) from the market-data API, or None when it is not set up or has no price."""
+    if not os.environ.get("FMP_API_KEY", "").strip():
+        return None
+    try:
+        out = json.loads(market_data("quote", {"symbol": symbol}))
+        row = (out.get("data") or [None])[0] or {}
+        price = row.get("price")
+        if isinstance(price, (int, float)) and price > 0:
+            return float(price), f"market data quote, retrieved {out['retrieved_at']}"
+    except (ToolError, ValueError, KeyError, TypeError, IndexError):
+        pass
+    return None
+
+
+def _portfolio_view_data():
+    import portfolio
+    if not PORTFOLIO["path"]:
+        raise ToolError("no portfolio loaded: start the bot with --portfolio <file>")
+    try:
+        return portfolio.valued(portfolio.load(PORTFOLIO["path"]), _live_quote)
+    except portfolio.PortfolioError as e:
+        raise ToolError(f"portfolio file: {e}") from e
+
+
+def portfolio_view():
+    view = _portfolio_view_data()
+    note = f"no price for {', '.join(view['unpriced'])}: left out of the totals" if view["unpriced"] else ""
+    return _result(f"portfolio file {pathlib.Path(PORTFOLIO['path']).name} (as of {view['as_of'] or 'undated'})", view, note)
+
+
+def portfolio_size(symbol, entry_price, stop_price, conviction, sector=None):
+    import portfolio
+    view = _portfolio_view_data()
+    try:
+        sized = portfolio.size_position(view, symbol, entry_price, stop_price, conviction, sector)
+    except portfolio.PortfolioError as e:
+        raise ToolError(str(e)) from e
+    return _result("portfolio_size: the user's rules applied to the portfolio file", sized)
+
 
 HANDLERS = {"edgar_lookup": edgar_lookup, "edgar_filings": edgar_filings, "edgar_document": edgar_document,
             "edgar_financials": edgar_financials, "fred_series": fred_series, "market_data": market_data,
-            "calculate": calculate}
+            "calculate": calculate, "portfolio_view": portfolio_view, "portfolio_size": portfolio_size}
 
 
 def validate(name, args):

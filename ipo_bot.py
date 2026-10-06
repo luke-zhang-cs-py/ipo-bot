@@ -2,6 +2,8 @@
 
     python ipo_bot.py "Rate the <company> IPO"      one question, memo printed and saved to memos/
     python ipo_bot.py                                interactive: ask follow-ups in one conversation
+    python ipo_bot.py --portfolio portfolio.json     review your holdings: buy/add/hold/trim/sell, sized by your rules
+    python ipo_bot.py --portfolio portfolio.json "Should I buy <ticker>?"
 
 Needs ANTHROPIC_API_KEY (or an `ant auth login` profile). Data tools use SEC_USER_AGENT, FRED_API_KEY and
 FMP_API_KEY when set; without them the bot says which data is missing instead of guessing.
@@ -45,7 +47,11 @@ def load_env(path=HERE / ".env"):
 
 load_env()
 
+import tools as tools_module  # noqa: E402
 from tools import TOOL_DEFS, run_tool  # noqa: E402
+
+REVIEW = ("Review my portfolio. For each holding say BUY/ADD/HOLD/TRIM/SELL with reasons, and suggest up to "
+          "3 new ideas to buy that fit my rules, each sized with portfolio_size.")
 MODEL = "claude-opus-5-5"
 # Opus 5.5 can decline a request; "default" re-runs a declined request on the fallback Anthropic
 # recommends for that category, inside the same call.
@@ -92,8 +98,11 @@ class Bot:
 
     def ask(self, question):
         """Answer one user message; the conversation carries on across calls."""
-        # The date goes in the user turn, not the system prompt, so the cached prefix stays the same.
-        self.messages.append({"role": "user", "content": f"{now_line()}\n\n{question}"})
+        # The date (and whether a portfolio is loaded) goes in the user turn, not the system prompt, so the
+        # cached prefix stays the same.
+        mode = "\nPortfolio mode: on. The user's portfolio file is loaded (portfolio_view, portfolio_size)." \
+            if tools_module.PORTFOLIO["path"] else ""
+        self.messages.append({"role": "user", "content": f"{now_line()}{mode}\n\n{question}"})
         for _ in range(MAX_TURNS):
             msg = self._request()
             # Append the whole content unchanged (thinking and server-tool blocks included).
@@ -142,6 +151,21 @@ def main(argv):
             stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
             pass
+    argv = list(argv)
+    if "--portfolio" in argv:
+        i = argv.index("--portfolio")
+        if i + 1 >= len(argv):
+            sys.exit("--portfolio needs a file, e.g. --portfolio portfolio.json")
+        path = pathlib.Path(argv[i + 1]).resolve()
+        del argv[i:i + 2]
+        import portfolio
+        try:
+            portfolio.load(path)            # check it now, not halfway through a research run
+        except portfolio.PortfolioError as e:
+            sys.exit(f"Portfolio file: {e}")
+        tools_module.PORTFOLIO["path"] = str(path)
+        if not argv:
+            argv = [REVIEW]
     try:
         bot = Bot()
     except anthropic.AnthropicError as e:

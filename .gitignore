@@ -3,3 +3,4 @@ memos/
 stress_runs/
 __pycache__/
 .pytest_cache/
+portfolio.json
