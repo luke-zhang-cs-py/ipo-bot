@@ -97,6 +97,16 @@ algorithm. Every score is compared with 40 runs of the same algorithm's scores h
 `*` marks better than luck, `!` worse. For the bot, it also checks how often its bull and bear cases came true against the probabilities
 it gave them.
 
+## Robustness
+
+```bash
+python robustness.py             # about 6 minutes
+```
+
+Three harder tests on the benchmark: permutation p-values with a Benjamini-Hochberg correction across all
+36 algorithm-universe-horizon tests (false-discovery rate 10%); a holdout that picks what worked before
+2018 and checks it from 2018 on; and the top-third portfolios after 0-50 basis points of trading costs.
+
 ## Test
 
 ```bash
@@ -122,6 +132,7 @@ memos as well: the checks catch missing parts, not bad reasoning.
 | `checks.py` | The memo rules a script can check. |
 | `stress_test.py` | The 11 test questions, graded by `checks.py`. |
 | `benchmark.py` | Walk-forward tests of simple prediction algorithms, and scoring of the bot's logged forecasts. |
+| `robustness.py` | Multiple-testing correction, a before/after-2018 holdout, and trading costs. |
 | `calibration.py` | Whether forecasts mean what they say: slopes, probabilities and ranges against outcomes, with a luck baseline. |
 
 ## Cost

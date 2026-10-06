@@ -173,6 +173,8 @@ def run(universe, refresh=False, seed=7, keep=None):
     months, px = panel(symbols, refresh)
     names = list(ALGORITHMS) + ["Blend (mom+trend+lowvol)", "Random (no skill)"]
     rng = random.Random(seed)
+    if keep is not None:
+        keep["months"] = months
     per = {h: {a: [] for a in names} for h in (1, 12)}   # per horizon and algorithm: one record per month-end
     for i in range(LOOKBACK, len(months) - 1):
         raw = {a: [f(px[s], i) for s in symbols] for a, f in ALGORITHMS.items()}
