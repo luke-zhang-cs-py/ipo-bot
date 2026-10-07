@@ -1,6 +1,7 @@
 // The browser demo's logic: portfolio.py's sizing rules and verify.py's KEY NUMBERS checks, line for line.
 // tests/test_js_parity.py runs both on the same inputs and fails if they disagree, so this file and the
-// Python cannot drift apart. Loaded by docs/app/index.html, and by Node for that test.
+// Python cannot drift apart. The projection charts at the end are JS-only; the same test checks their properties.
+// Loaded by docs/app/index.html, and by Node for that test.
 (function (root) {
   "use strict";
   const DEFAULT_RULES = { max_position_pct: 10.0, max_sector_pct: 30.0, risk_per_trade_pct: 1.0, min_cash_pct: 5.0,
@@ -203,6 +204,72 @@
     return [["KEY NUMBERS block present and valid", true, ""]].concat(check(k));
   }
 
-  const api = { PortfolioError, validate, valued, sizePosition, extract, check, checkMemo };
+  // ---------- projections (the demo's charts; not in the Python, so tests/test_js_parity.py checks their properties)
+  function expectedRating(er, conviction) {     // verify.expected_rating
+    if (er >= OVERWEIGHT && CONVICTION_OK.has(conviction)) return "Overweight";
+    if (er <= UNDERWEIGHT) return "Underweight";
+    return "Equal-weight";
+  }
+
+  function rng(seed) {                          // mulberry32: the same seed draws the same paths
+    let a = seed >>> 0;
+    return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  }
+
+  const quantile = (sorted, q) => { const i = (sorted.length - 1) * q, lo = Math.floor(i); return sorted[lo] + (sorted[Math.min(lo + 1, sorted.length - 1)] - sorted[lo]) * (i - lo); };
+
+  // Each simulated path picks bull, base or bear by its probability, ends near that target (lognormal, spread by
+  // half the volatility, mean exactly on the target) and gets there as a Brownian bridge with the full volatility.
+  // So the paths' average ending is the PWV, and the bands show how wide the road is, not just where it ends.
+  function project(o) {
+    const cases = ["bull", "base", "bear"], price = o.price, months = o.months ?? 12, vol = (o.vol ?? 35) / 100;
+    if (!(isFinite(price) && price > 0)) throw new Error("price must be above 0");
+    for (const c of cases) if (!(o[c] && isFinite(o[c].value) && o[c].value > 0 && isFinite(o[c].prob) && o[c].prob >= 0)) throw new Error(c + " needs a value above 0 and a probability");
+    const sum = cases.reduce((a, c) => a + o[c].prob, 0);
+    if (Math.abs(sum - 100) > 0.01) throw new Error("probabilities add up to " + +sum.toFixed(2) + "%, not 100%");
+    if (!(o.bear.value < o.base.value && o.base.value < o.bull.value)) throw new Error("needs bear < base < bull");
+    if (!(Number.isInteger(months) && months >= 1 && months <= 36)) throw new Error("horizon must be 1 to 36 months");
+    if (!(vol >= 0 && vol <= 2)) throw new Error("volatility must be 0% to 200%");
+    const stop = isFinite(o.stop) && o.stop > 0 ? o.stop : null;
+    const nPaths = o.paths ?? 2000, steps = o.steps ?? months * 4, h = months / 12, dt = h / steps, sw = vol / 2;
+    const t = Array.from({ length: steps + 1 }, (_, i) => i * months / steps);
+    const pwv = cases.reduce((a, c) => a + o[c].value * o[c].prob / 100, 0), er = 100 * (pwv / price - 1);
+    const scenario = Object.fromEntries(cases.map((c) => [c, t.map((m) => price * Math.pow(o[c].value / price, m / months))]));
+    const weighted = t.map((_, i) => cases.reduce((a, c) => a + scenario[c][i] * o[c].prob / 100, 0));
+    const r = rng(o.seed ?? 1), normal = () => Math.sqrt(-2 * Math.log(1 - r())) * Math.cos(2 * Math.PI * r());
+    const cols = t.map(() => new Float64Array(nPaths)), ends = new Float64Array(nPaths), picks = { bull: 0, base: 0, bear: 0 };
+    let touched = 0;
+    const l0 = Math.log(price), w = new Float64Array(steps + 1);
+    for (let p = 0; p < nPaths; p++) {
+      const u = r() * 100, c = u < o.bull.prob ? "bull" : u < o.bull.prob + o.base.prob ? "base" : "bear";
+      picks[c]++;
+      const lEnd = Math.log(o[c].value) + sw * Math.sqrt(h) * normal() - sw * sw * h / 2;
+      for (let i = 1; i <= steps; i++) w[i] = w[i - 1] + vol * Math.sqrt(dt) * normal();
+      let low = Infinity;
+      for (let i = 0; i <= steps; i++) {
+        const f = i / steps, x = Math.exp(l0 + f * (lEnd - l0) + w[i] - f * w[steps]);
+        cols[i][p] = x; if (x < low) low = x;
+      }
+      ends[p] = cols[steps][p];
+      if (stop !== null && low <= stop) touched++;
+    }
+    const qs = [0.1, 0.25, 0.5, 0.75, 0.9], bands = Object.fromEntries(qs.map((q) => ["p" + Math.round(q * 100), []]));
+    for (const col of cols) { const s = Float64Array.from(col).sort(); for (const q of qs) bands["p" + Math.round(q * 100)].push(quantile(s, q)); }
+    const sorted = Float64Array.from(ends).sort(), lo = quantile(sorted, 0.01), hi = quantile(sorted, 0.99), nb = o.bins ?? 32;
+    const counts = new Array(nb).fill(0), width = (hi - lo) / nb || 1;
+    for (const x of sorted) if (x >= lo && x <= hi) counts[Math.min(nb - 1, Math.floor((x - lo) / width))]++;
+    const share = (f) => { let k = 0; for (const x of ends) if (f(x)) k++; return k / nPaths; };
+    return {
+      price, months, vol: vol * 100, stop, t, pwv, expected_return_pct: er, rating: expectedRating(er, o.conviction ?? "Medium"),
+      scenario, weighted, bands, picks,
+      histogram: { lo, width, counts, edges: counts.map((_, i) => lo + i * width) },
+      mean_end: ends.reduce((a, b) => a + b, 0) / nPaths,
+      p_end_above_price: share((x) => x > price), p_end_below_stop: stop === null ? null : share((x) => x < stop),
+      p_touch_stop: stop === null ? null : touched / nPaths,
+      range80: [quantile(sorted, 0.1), quantile(sorted, 0.9)],
+    };
+  }
+
+  const api = { PortfolioError, validate, valued, sizePosition, extract, check, checkMemo, expectedRating, project };
   if (typeof module === "object" && module.exports) module.exports = api; else root.IpoCore = api;
 })(typeof self !== "undefined" ? self : this);

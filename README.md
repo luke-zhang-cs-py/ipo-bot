@@ -6,11 +6,12 @@
 
 IPO and stock research on Claude that answers in one page, then lets code **check every number in it**.
 
-### ▶ [Size a trade and check a memo →](https://luke-zhang-cs-py.github.io/ipo-bot/app/)
-Runs in your browser with the bot's own sizing rules and memo checks, ported from the Python and tested against it.
-No API key, nothing uploaded.
+### ▶ [Project a stock, size a trade, check a memo →](https://luke-zhang-cs-py.github.io/ipo-bot/app/)
+Runs in your browser: a memo's bull, base and bear cases drawn as a price projection (2,000 simulated paths that
+average out at the probability-weighted value), the bot's own sizing rules, and its memo checks, ported from the
+Python and tested against it. No API key, nothing uploaded.
 
-![Sizing a purchase by portfolio rules as the stop-working price moves, then the memo checker catching an EV that doesn't add up and a rating the numbers don't support](docs/demo.gif)
+![A price projection with bull, base and bear paths and 10-90% bands, then sizing a purchase as the stop-working price moves, then the memo checker catching a rating the numbers don't support](docs/demo.gif)
 
 **[Read the write-up →](https://luke-zhang-cs-py.github.io/ipo-bot/)** — what a memo contains, why its numbers can be
 trusted, and what an honest benchmark found.
@@ -57,7 +58,7 @@ python src/ipo_bot.py --audit "Rate <ticker>"            # plus a second-pass au
 ## Tests
 
 ```bash
-python -m pytest -q tests                  # 100 offline tests, free (3 need Node: the browser demo against the Python)
+python -m pytest -q tests                  # 104 offline tests, free (7 need Node: the browser demo against the Python)
 IPO_BOT_LIVE=1 python -m pytest -q tests/test_live_market.py   # 15 live checks on real SEC filings and prices
 python testkit/kit.py regress --yes        # the test kit, live: calculation cases, hallucination traps, a tools-off
                                            # stale-data test, rule tests; costs API credit

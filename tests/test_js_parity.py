@@ -115,3 +115,67 @@ def test_every_memo_check_matches_the_python():
     for memo, got in zip(memos, js):
         want = [[name, ok] for name, ok, _ in verify.check_memo(memo)]
         assert got == want, (memo[:80], [x for x in got if x not in want], [x for x in want if x not in got])
+
+
+# ----------------------------------------------------------------------------- projection charts (JS only)
+PROJECT = """
+const core = require(process.argv[1]);
+let input = '';
+process.stdin.on('data', (d) => input += d).on('end', () => {
+  const job = JSON.parse(input);
+  const out = {
+    ratings: job.ratings.map(([er, conv]) => core.expectedRating(er, conv)),
+    runs: job.runs.map((o) => { try { return core.project(o); } catch (e) { return { error: e.message }; } }),
+  };
+  process.stdout.write(JSON.stringify(out));
+});
+"""
+SCEN = {"price": 50, "bull": {"value": 80, "prob": 30}, "base": {"value": 62, "prob": 50}, "bear": {"value": 35, "prob": 20},
+        "stop": 40, "months": 12, "vol": 35, "conviction": "Medium"}
+
+
+def run_project(job):
+    r = subprocess.run([NODE, "-e", PROJECT, str(CORE)], input=json.dumps(job), capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout)
+
+
+def test_the_charts_rate_by_the_bots_own_thresholds():
+    grid = [[er, conv] for er in (-30, -10.01, -10, -9.99, 0, 14.99, 15, 15.01, 40) for conv in ("Low", "Medium", "High")]
+    got = run_project({"ratings": grid, "runs": []})["ratings"]
+    assert got == [verify.expected_rating(er, conv) for er, conv in grid]
+
+
+def test_the_projection_lands_on_the_scenarios_and_the_pwv():
+    a, b, other = run_project({"ratings": [], "runs": [SCEN, SCEN, {**SCEN, "seed": 2}]})["runs"]
+    assert a == b and a["bands"] != other["bands"]                        # the seed fixes the paths
+    want = verify.pwv({c: SCEN[c] for c in ("bull", "base", "bear")})
+    assert abs(a["pwv"] - want) < 1e-9 and abs(a["weighted"][-1] - want) < 1e-9
+    assert abs(a["expected_return_pct"] - 100 * (want / 50 - 1)) < 1e-9
+    assert a["rating"] == verify.expected_rating(a["expected_return_pct"], "Medium")
+    for c in ("bull", "base", "bear"):
+        assert abs(a["scenario"][c][0] - 50) < 1e-9 and abs(a["scenario"][c][-1] - SCEN[c]["value"]) < 1e-9
+    assert abs(a["mean_end"] / want - 1) < 0.03                            # the paths average out at the PWV
+    assert all(abs(n / 2000 - SCEN[c]["prob"] / 100) < 0.04 for c, n in a["picks"].items())
+
+
+def test_the_bands_are_ordered_and_start_at_todays_price():
+    run = run_project({"ratings": [], "runs": [SCEN]})["runs"][0]
+    bands = [run["bands"][k] for k in ("p10", "p25", "p50", "p75", "p90")]
+    assert all(abs(b[0] - 50) < 1e-9 for b in bands)
+    for i in range(len(run["t"])):
+        assert all(lo <= hi + 1e-9 for lo, hi in zip([b[i] for b in bands], [b[i] for b in bands][1:]))
+    assert run["p_touch_stop"] >= run["p_end_below_stop"]                  # ending below the stop means it was touched
+    assert sum(run["histogram"]["counts"]) >= 0.97 * 2000
+    assert run["range80"][0] < run["pwv"] < run["range80"][1]
+
+
+def test_more_volatility_widens_the_bands_and_bad_input_is_refused():
+    calm, wild, *bad = run_project({"ratings": [], "runs": [
+        {**SCEN, "vol": 15}, {**SCEN, "vol": 70},
+        {**SCEN, "bull": {"value": 80, "prob": 35}}, {**SCEN, "bear": {"value": 70, "prob": 20}},
+        {**SCEN, "price": 0}, {**SCEN, "months": 0}]})["runs"]
+    width = lambda r: r["bands"]["p90"][len(r["t"]) // 2] - r["bands"]["p10"][len(r["t"]) // 2]
+    assert width(wild) > width(calm) and wild["p_touch_stop"] > calm["p_touch_stop"]
+    assert [("error" in r) for r in bad] == [True] * 4
+    assert "100%" in bad[0]["error"] and "bear < base < bull" in bad[1]["error"]

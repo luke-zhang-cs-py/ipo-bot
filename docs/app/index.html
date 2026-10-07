@@ -3,88 +3,249 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPO bot: size a trade, check a memo</title>
-<meta name="description" content="Two parts of the IPO bot that run without an API key: sizing a purchase by your own portfolio rules, and checking a memo's KEY NUMBERS block.">
+<title>IPO bot terminal</title>
+<meta name="description" content="The parts of the IPO bot that run without an API key: project a stock from its bull, base and bear scenarios, size a purchase by your own portfolio rules, and check a memo's KEY NUMBERS block.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
-:root { --bg: #f7f8f6; --card: #ffffff; --ink: #14181c; --muted: #5b646d; --rule: #d9dedf; --accent: #0f766e; --bad: #b42318; --good: #067647; --warn: #b54708; --soft: #eef2f1; color-scheme: light; }
-@media (prefers-color-scheme: dark) { :root { --bg: #111416; --card: #181c1f; --ink: #e9edef; --muted: #9aa4ac; --rule: #2a3135; --accent: #2dd4bf; --bad: #f97066; --good: #47cd89; --warn: #fdb022; --soft: #1f2528; color-scheme: dark; } }
+/* One deliberate look: a dark trading terminal. Every colour is a token here. */
+:root {
+  --bg: #05080b; --grid: rgba(34, 211, 238, .045); --panel: #0a0f14; --panel-2: #0e151c; --line: #1a2632; --line-hi: #2a4153;
+  --ink: #d9e5ec; --muted: #8597a4; --faint: #556876;
+  --cyan: #22d3ee; --green: #34d399; --red: #f87171; --amber: #fbbf24; --white: #f1f7fa;
+  --glow: 0 0 12px rgba(34, 211, 238, .35);
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: dark;
+}
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-.wrap { max-width: 1080px; margin: 0 auto; padding: 28px 18px 48px; }
-h1 { font-size: 1.8rem; line-height: 1.15; margin: 0 0 6px; letter-spacing: -0.01em; }
-.lede { color: var(--muted); margin: 0 0 20px; max-width: 70ch; }
-.tabs { display: inline-flex; gap: 4px; border: 1px solid var(--rule); border-radius: 999px; padding: 3px; margin-bottom: 18px; flex-wrap: wrap; }
-.tabs button { border: 0; background: none; color: var(--muted); font: inherit; font-weight: 650; padding: 7px 14px; border-radius: 999px; cursor: pointer; }
-.tabs button[aria-selected="true"] { background: var(--ink); color: var(--bg); }
-.panel { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
-@media (min-width: 900px) { .panel { grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); } }
-.card { background: var(--card); border: 1px solid var(--rule); border-radius: 12px; padding: 16px; min-width: 0; }
-h2 { font-size: 1.05rem; margin: 0 0 10px; }
-label { display: flex; flex-direction: column; gap: 3px; font-size: .8rem; color: var(--muted); }
-input, select, textarea { font: inherit; font-size: .9rem; color: var(--ink); background: var(--bg); border: 1px solid var(--rule); border-radius: 7px; padding: 6px 8px; min-width: 0; }
-textarea { width: 100%; min-height: 360px; font-family: ui-monospace, Consolas, monospace; font-size: .78rem; line-height: 1.4; }
-.grid4 { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
-.tablewrap { overflow-x: auto; }
-table { border-collapse: collapse; width: 100%; font-size: .85rem; font-variant-numeric: tabular-nums; }
-th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
-th { color: var(--muted); font-weight: 600; }
-td input { width: 100%; min-width: 64px; padding: 4px 6px; }
-.btn { font: inherit; font-weight: 650; border: 1px solid var(--ink); background: var(--ink); color: var(--bg); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
-.btn.ghost { background: transparent; color: var(--ink); }
-.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
-.big { font-size: 2rem; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
-.muted { color: var(--muted); font-size: .85rem; }
-.bars { display: grid; gap: 7px; margin-top: 12px; }
-.bar { display: grid; grid-template-columns: 5.5rem 1fr 4.5rem; gap: 8px; align-items: center; font-size: .85rem; font-variant-numeric: tabular-nums; }
-.track { height: 10px; background: var(--soft); border-radius: 5px; overflow: hidden; }
-.fill { height: 100%; background: var(--muted); border-radius: 5px; }
-.bar.bind .fill { background: var(--accent); } .bar.bind span:first-child { font-weight: 750; }
-.err { color: var(--bad); font-weight: 650; }
-.breach { color: var(--warn); font-size: .85rem; margin: 6px 0 0; }
-.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: .88rem; }
-.checks li { display: grid; grid-template-columns: 1.4rem 1fr; gap: 4px; }
-.checks .ok::before { content: "✓"; color: var(--good); font-weight: 800; } .checks .no::before { content: "✗"; color: var(--bad); font-weight: 800; }
-.checks .no { color: var(--bad); }
-.checks small { grid-column: 2; color: var(--muted); }
-.score { font-size: 1.05rem; font-weight: 750; margin-bottom: 8px; }
-.foot { margin-top: 22px; color: var(--muted); font-size: .85rem; }
-a { color: var(--accent); }
+html { background: var(--bg); }
+body { margin: 0; color: var(--ink); font: 14px/1.55 var(--sans); min-height: 100vh;
+  background: var(--bg) linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 100% 28px,
+              linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 28px 100%; background-color: var(--bg); }
+body::after { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 50;
+  background: repeating-linear-gradient(0deg, rgba(255,255,255,.018) 0 1px, transparent 1px 3px); }
+a { color: var(--cyan); }
 [hidden] { display: none !important; }
+.mono, input, select, button, .tag, table, .k, .v { font-family: var(--mono); }
+
+/* status bar and ticker */
+.status { position: sticky; top: 0; z-index: 20; background: rgba(5, 8, 11, .92); backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); }
+.status .in { max-width: 1240px; margin: 0 auto; padding: 8px 16px; display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; font: 500 .74rem var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.brand { color: var(--white); font-weight: 800; letter-spacing: .1em; }
+.brand b { color: var(--cyan); text-shadow: var(--glow); }
+.cursor { display: inline-block; width: .55em; height: 1em; background: var(--cyan); vertical-align: -2px; margin-left: 4px; animation: blink 1.1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.chips { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-left: auto; }
+.led { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); margin-right: 6px; vertical-align: 1px; }
+.led.off { background: var(--faint); box-shadow: none; }
+.tape { overflow: hidden; border-top: 1px solid var(--line); white-space: nowrap; font: 500 .74rem var(--mono); letter-spacing: .04em; }
+.tape .run { display: inline-block; padding: 5px 0; animation: tape 38s linear infinite; }
+.tape span { margin-right: 34px; color: var(--muted); }
+.tape b { color: var(--ink); font-weight: 700; }
+.tape .up { color: var(--green); } .tape .dn { color: var(--red); }
+@keyframes tape { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+.wrap { max-width: 1240px; margin: 0 auto; padding-inline: 16px; padding-block: 22px 48px; }
+.head { display: flex; flex-wrap: wrap; gap: 10px 28px; align-items: flex-end; justify-content: space-between; margin-bottom: 18px; }
+h1 { font: 800 clamp(1.4rem, 1.1rem + 1.4vw, 2.1rem)/1.1 var(--mono); letter-spacing: -.02em; margin: 0 0 6px; color: var(--white); text-wrap: balance; }
+h1 em { font-style: normal; color: var(--cyan); text-shadow: var(--glow); }
+.lede { color: var(--muted); margin: 0; max-width: 68ch; }
+.tabs { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--line-hi); border-radius: 6px; overflow: hidden; }
+.tabs button { border: 0; border-right: 1px solid var(--line-hi); background: var(--panel); color: var(--muted); font: 700 .78rem var(--mono); letter-spacing: .08em; text-transform: uppercase; padding: 9px 14px; cursor: pointer; }
+.tabs button:last-child { border-right: 0; }
+.tabs button i { font-style: normal; color: var(--faint); margin-right: 6px; }
+.tabs button:hover { color: var(--ink); }
+.tabs button[aria-selected="true"] { background: var(--cyan); color: #031015; }
+.tabs button[aria-selected="true"] i { color: #0b4450; }
+
+/* panels */
+.panel { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 980px) { .panel.two { grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); } .panel.proj { grid-template-columns: 320px minmax(0, 1fr); } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; min-width: 0; position: relative; }
+.card::before { content: ""; position: absolute; top: -1px; left: 14px; width: 42px; height: 2px; background: var(--cyan); box-shadow: var(--glow); }
+.ph { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; margin: 0 0 12px; }
+h2 { font: 700 .78rem var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink); margin: 0; }
+h2 i { font-style: normal; color: var(--cyan); margin-right: 8px; }
+.ph small { font: 500 .7rem var(--mono); color: var(--faint); letter-spacing: .06em; text-transform: uppercase; }
+.stack { display: grid; gap: 14px; min-width: 0; }
+
+label { display: flex; flex-direction: column; gap: 4px; font: 600 .68rem var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+input, select, textarea { font-size: .88rem; color: var(--white); background: var(--panel-2); border: 1px solid var(--line-hi); border-radius: 5px; padding: 6px 8px; min-width: 0; }
+input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
+input[type=range] { padding: 0; accent-color: var(--cyan); background: none; border: 0; }
+textarea { width: 100%; min-height: 380px; font: .76rem/1.45 var(--mono); color: #a8f0c6; }
+.grid2 { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid4 { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .8rem; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--faint); font-weight: 600; font-size: .66rem; letter-spacing: .08em; text-transform: uppercase; }
+td input { width: 100%; min-width: 60px; padding: 4px 6px; }
+.btn { font: 700 .74rem var(--mono); letter-spacing: .06em; text-transform: uppercase; border: 1px solid var(--line-hi); background: var(--panel-2); color: var(--ink); border-radius: 5px; padding: 7px 10px; cursor: pointer; }
+.btn:hover { border-color: var(--cyan); color: var(--cyan); }
+.btn.go { background: var(--cyan); border-color: var(--cyan); color: #031015; }
+.btn.go:hover { color: #031015; box-shadow: var(--glow); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+.note { color: var(--muted); font-size: .8rem; margin: 10px 0 0; }
+.sum { font: 600 .72rem var(--mono); color: var(--green); } .sum.bad { color: var(--red); }
+.c-bull { color: var(--green); } .c-base { color: var(--cyan); } .c-bear { color: var(--red); }
+
+/* readouts */
+.tiles { display: grid; gap: 1px; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.tile { background: var(--panel); padding: 10px 12px; min-width: 0; }
+.tiles.quad { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.panel.proj > .card { align-self: start; }
+.k { display: block; font-size: .64rem; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+.v { display: block; font-size: 1.28rem; font-weight: 800; color: var(--white); font-variant-numeric: tabular-nums; line-height: 1.25; }
+.v small { font-size: .7rem; font-weight: 500; color: var(--muted); }
+.v.up { color: var(--green); } .v.dn { color: var(--red); } .v.hi { color: var(--cyan); text-shadow: var(--glow); }
+.big { font: 800 2.3rem/1 var(--mono); color: var(--cyan); text-shadow: var(--glow); font-variant-numeric: tabular-nums; }
+.err { color: var(--red); font: 600 .85rem var(--mono); }
+
+/* charts */
+.chart { position: relative; width: 100%; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart text { font-family: var(--mono); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font: 500 .7rem var(--mono); color: var(--muted); margin: 8px 0 0; }
+.legend span::before { content: ""; display: inline-block; width: 14px; height: 3px; margin-right: 6px; vertical-align: 3px; background: currentColor; }
+.legend .l-band::before { height: 9px; vertical-align: -1px; background: rgba(34, 211, 238, .22); }
+.legend .l-stop::before { background: repeating-linear-gradient(90deg, var(--red) 0 4px, transparent 4px 7px); }
+.legend .l-pwv { color: var(--amber); }
+.readout { position: absolute; top: 8px; pointer-events: none; background: rgba(5, 8, 11, .92); border: 1px solid var(--line-hi); border-radius: 5px; padding: 7px 9px; font: 500 .7rem/1.5 var(--mono); color: var(--muted); min-width: 150px; }
+.readout b { color: var(--white); }
+.readout div { display: flex; justify-content: space-between; gap: 12px; }
+.readout.below { position: static; margin-top: 8px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
+.readout.below div:first-child { grid-column: 1 / -1; }
+
+/* sizing bars */
+.bars { display: grid; gap: 8px; margin-top: 14px; }
+.bar { display: grid; grid-template-columns: 5.5rem 1fr 4.5rem; gap: 10px; align-items: center; font: .78rem var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); }
+.track { height: 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 2px; overflow: hidden; }
+.fill { height: 100%; background: repeating-linear-gradient(90deg, var(--faint) 0 6px, transparent 6px 8px); }
+.bar.bind { color: var(--white); } .bar.bind .fill { background: repeating-linear-gradient(90deg, var(--cyan) 0 6px, transparent 6px 8px); filter: drop-shadow(0 0 4px rgba(34, 211, 238, .6)); }
+.breach { color: var(--amber); font: .78rem var(--mono); margin: 8px 0 0; }
+
+/* memo checks */
+.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; font: .78rem var(--mono); }
+.checks li { display: grid; grid-template-columns: 3.4rem 1fr; gap: 8px; padding: 3px 0; border-bottom: 1px dashed var(--line); }
+.checks li::before { font-weight: 800; }
+.checks .ok::before { content: "[PASS]"; color: var(--green); } .checks .no::before { content: "[FAIL]"; color: var(--red); }
+.checks .no { color: var(--white); }
+.checks small { grid-column: 2; color: var(--amber); }
+.score { font: 800 1rem var(--mono); margin-bottom: 10px; letter-spacing: .02em; }
+
+.foot { margin-top: 22px; color: var(--faint); font: .72rem var(--mono); letter-spacing: .04em; }
+@media (prefers-reduced-motion: reduce) { .cursor, .tape .run { animation: none; } }
+@media (max-width: 560px) { .grid2 { grid-template-columns: minmax(0, 1fr); } .chips { margin-left: 0; } }
 </style>
 </head>
 <body>
-<main class="wrap">
-  <h1>IPO bot: size a trade, check a memo</h1>
-  <p class="lede">The bot writes research memos with Claude and live data, which needs an API key. These two parts don't: they are the same
-    rules, ported from the Python and tested against it case by case. Nothing you type leaves the page.
-    <a href="../">Read the write-up</a> · <a href="https://github.com/luke-zhang-cs-py/ipo-bot">Source</a></p>
+<header class="status">
+  <div class="in">
+    <span class="brand">IPO<b>_</b>BOT ▸ TERMINAL<span class="cursor" aria-hidden="true"></span></span>
+    <span class="chips">
+      <span><span class="led"></span>ENGINE ipo-core.js</span>
+      <span><span class="led off"></span>API OFF</span>
+      <span><span class="led"></span>DATA LOCAL</span>
+      <span id="clock" aria-label="local time">--:--:--</span>
+    </span>
+  </div>
+  <div class="tape" aria-hidden="true"><div class="run" id="tape"></div></div>
+</header>
 
-  <div class="tabs" role="tablist">
-    <button role="tab" id="t-size" aria-selected="true" aria-controls="p-size">Size a trade</button>
-    <button role="tab" id="t-check" aria-selected="false" aria-controls="p-check">Check a memo's numbers</button>
+<main class="wrap">
+  <div class="head">
+    <div>
+      <h1>Project<em>.</em> Size<em>.</em> Check<em>.</em></h1>
+      <p class="lede">The parts of the IPO bot that run without an API key: chart a stock from a memo's bull, base and bear cases, size a
+        purchase by your own rules, and check a memo's numbers. Same rules as the Python, tested against it. Nothing you type leaves the page.
+        <a href="../">Write-up</a> · <a href="https://github.com/luke-zhang-cs-py/ipo-bot">Source</a></p>
+    </div>
+    <div class="tabs" role="tablist">
+      <button role="tab" id="t-proj" aria-selected="true" aria-controls="p-proj"><i>01</i>Project</button>
+      <button role="tab" id="t-size" aria-selected="false" aria-controls="p-size"><i>02</i>Size a trade</button>
+      <button role="tab" id="t-check" aria-selected="false" aria-controls="p-check"><i>03</i>Check a memo</button>
+    </div>
   </div>
 
-  <section id="p-size" class="panel" role="tabpanel" aria-labelledby="t-size">
+  <!-- 01 projection -->
+  <section id="p-proj" class="panel proj" role="tabpanel" aria-labelledby="t-proj">
     <div class="card">
-      <h2>Your portfolio and rules</h2>
+      <div class="ph"><h2><i>01.1</i>Scenarios</h2><small id="tick">EXM</small></div>
+      <div class="grid2">
+        <label>Price now <input id="pj-price" type="number" step="any" min="0" value="50"></label>
+        <label>Stop-working <input id="pj-stop" type="number" step="any" min="0" value="35"></label>
+        <label>Horizon <select id="pj-months"><option value="3">3 months</option><option value="6">6 months</option><option value="12" selected>12 months</option><option value="18">18 months</option><option value="24">24 months</option></select></label>
+        <label>Conviction <select id="pj-conv"><option>Low</option><option selected>Medium</option><option>High</option></select></label>
+      </div>
+      <div class="tablewrap" style="margin-top:12px"><table>
+        <thead><tr><th>Case</th><th>Value $</th><th>Prob %</th></tr></thead>
+        <tbody>
+          <tr><td class="c-bull">BULL</td><td><input id="pj-bull-v" type="number" step="any" value="80" aria-label="bull value"></td><td><input id="pj-bull-p" type="number" step="5" value="30" aria-label="bull probability"></td></tr>
+          <tr><td class="c-base">BASE</td><td><input id="pj-base-v" type="number" step="any" value="62" aria-label="base value"></td><td><input id="pj-base-p" type="number" step="5" value="50" aria-label="base probability"></td></tr>
+          <tr><td class="c-bear">BEAR</td><td><input id="pj-bear-v" type="number" step="any" value="35" aria-label="bear value"></td><td><input id="pj-bear-p" type="number" step="5" value="20" aria-label="bear probability"></td></tr>
+        </tbody>
+      </table></div>
+      <p class="sum" id="pj-sum"></p>
+      <label style="margin-top:6px">Volatility <span class="mono" id="pj-vol-out" style="color:var(--white)">35% a year</span>
+        <input id="pj-vol" type="range" min="5" max="120" step="1" value="35"></label>
+      <div class="row">
+        <button class="btn" data-preset="memo">Example memo</button>
+        <button class="btn" data-preset="ipo">Hot IPO</button>
+        <button class="btn" data-preset="def">Defensive</button>
+      </div>
+      <div class="row"><button class="btn go" id="to-size">▸ Size this trade</button></div>
+      <p class="note">Each of 2,000 simulated paths picks bull, base or bear by its probability, ends near that value and gets there
+        with the volatility above. The paths average out at the probability-weighted value; the seed is fixed, so the same inputs draw the same chart.</p>
+    </div>
+
+    <div class="stack">
+      <div class="tiles" id="pj-tiles"></div>
+      <div class="card">
+        <div class="ph"><h2><i>01.2</i>Price projection</h2><small id="pj-sub"></small></div>
+        <div class="chart" id="fan"></div>
+        <div class="legend"><span class="l-band">10–90% / 25–75% of paths</span><span class="c-bull">Bull</span><span class="c-base">Base</span><span class="c-bear">Bear</span><span class="l-pwv">Probability-weighted</span><span class="l-stop c-bear">Stop-working</span></div>
+      </div>
+      <div class="panel two" style="gap:14px">
+        <div class="card">
+          <div class="ph"><h2><i>01.3</i>Where it ends</h2><small>2,000 paths</small></div>
+          <div class="chart" id="hist"></div>
+        </div>
+        <div class="card">
+          <div class="ph"><h2><i>01.4</i>Rating</h2><small>verify.py thresholds</small></div>
+          <div class="chart" id="gauge"></div>
+          <p class="note" id="gauge-note"></p>
+        </div>
+      </div>
+      <p class="note" style="margin:0">The benchmark found that 80% ranges drawn from price history held the outcome only 70–77% of the time,
+        so treat these bands as the memo's view, not a guarantee. Example figures, not a real company.</p>
+    </div>
+  </section>
+
+  <!-- 02 sizing -->
+  <section id="p-size" class="panel two" role="tabpanel" aria-labelledby="t-size" hidden>
+    <div class="card">
+      <div class="ph"><h2><i>02.1</i>Portfolio and rules</h2><small>placeholders</small></div>
       <div class="tablewrap"><table id="holdings"><thead><tr><th>Symbol</th><th>Shares</th><th>Price</th><th>Cost basis</th><th>Sector</th></tr></thead><tbody></tbody></table></div>
       <div class="grid4" style="margin-top:12px">
         <label>Cash <input id="cash" type="number" step="any" min="0"></label>
-        <label>Max per stock % <input id="r-pos" type="number" step="any" min="0" max="100"></label>
-        <label>Max per sector % <input id="r-sec" type="number" step="any" min="0" max="100"></label>
-        <label>Risk per trade % <input id="r-risk" type="number" step="any" min="0" max="100"></label>
+        <label>Max / stock % <input id="r-pos" type="number" step="any" min="0" max="100"></label>
+        <label>Max / sector % <input id="r-sec" type="number" step="any" min="0" max="100"></label>
+        <label>Risk / trade % <input id="r-risk" type="number" step="any" min="0" max="100"></label>
         <label>Cash floor % <input id="r-cash" type="number" step="any" min="0" max="100"></label>
       </div>
-      <p class="muted" style="margin:10px 0 0">The example holdings are placeholders. The most you lose if a trade reaches its stop-working
-        price is the risk budget: portfolio value × risk per trade × conviction (Low 0.5, Medium 1, High 1.5).</p>
+      <p class="note">The most you lose if a trade reaches its stop-working price is the risk budget: portfolio value × risk per trade ×
+        conviction (Low 0.5, Medium 1, High 1.5).</p>
       <div id="breaches"></div>
     </div>
     <div class="card">
-      <h2>The trade</h2>
+      <div class="ph"><h2><i>02.2</i>The trade</h2><small>smallest limit wins</small></div>
       <div class="grid4">
         <label>Symbol <input id="sym" value="DDD"></label>
         <label>Entry price <input id="entry" type="number" step="any" value="50"></label>
-        <label>Stop-working price <input id="stop" type="number" step="any" value="45"></label>
+        <label>Stop-working <input id="stop" type="number" step="any" value="45"></label>
         <label>Conviction <select id="conv"><option>Low</option><option selected>Medium</option><option>High</option></select></label>
         <label>Sector <input id="sector" value="Energy"></label>
       </div>
@@ -92,27 +253,29 @@ a { color: var(--accent); }
     </div>
   </section>
 
-  <section id="p-check" class="panel" role="tabpanel" aria-labelledby="t-check" hidden>
+  <!-- 03 memo checks -->
+  <section id="p-check" class="panel two" role="tabpanel" aria-labelledby="t-check" hidden>
     <div class="card">
-      <h2>A memo's KEY NUMBERS block</h2>
-      <p class="muted" style="margin:0 0 8px">Every full memo ends with this block so code can check it. Paste one, or edit the example: change a
+      <div class="ph"><h2><i>03.1</i>KEY NUMBERS block</h2><small>json</small></div>
+      <p class="note" style="margin:0 0 8px">Every full memo ends with this block so code can check it. Paste one, or edit the example: change a
         probability, the share count or the rating and watch the checks.</p>
       <textarea id="memo" spellcheck="false" aria-label="KEY NUMBERS block"></textarea>
       <div class="row">
-        <button class="btn ghost" data-load="good">Consistent example</button>
-        <button class="btn ghost" data-load="ev">EV that doesn't add up</button>
-        <button class="btn ghost" data-load="rating">Rating against the numbers</button>
-        <button class="btn ghost" data-load="stale">Unflagged stale price</button>
+        <button class="btn" data-load="good">Consistent</button>
+        <button class="btn" data-load="ev">EV doesn't add up</button>
+        <button class="btn" data-load="rating">Rating vs numbers</button>
+        <button class="btn" data-load="stale">Stale price</button>
       </div>
+      <div class="row"><button class="btn go" id="to-proj">▸ Chart these scenarios</button><span class="err" id="to-proj-err"></span></div>
     </div>
     <div class="card">
-      <h2>Checks</h2>
+      <div class="ph"><h2><i>03.2</i>Checks</h2><small>verify.py</small></div>
       <div id="score" class="score"></div>
       <ul id="checks" class="checks"></ul>
     </div>
   </section>
 
-  <p class="foot">Example figures are placeholders, not a real company. For information only, not investment advice.</p>
+  <p class="foot">EXAMPLE FIGURES ARE PLACEHOLDERS, NOT A REAL COMPANY · FOR INFORMATION ONLY, NOT INVESTMENT ADVICE</p>
 </main>
 <script src="ipo-core.js"></script>
 <script>
@@ -120,14 +283,163 @@ a { color: var(--accent); }
   "use strict";
   const $ = (id) => document.getElementById(id);
   const fmt = (x, d = 2) => Number(x).toLocaleString("en-CA", { minimumFractionDigits: d, maximumFractionDigits: d });
+  const pct = (x, d = 1) => (x > 0 ? "+" : "") + fmt(x, d) + "%";
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const n = (v) => v === "" ? undefined : Number(v);
 
-  // ---------- tabs
-  for (const t of document.querySelectorAll('[role="tab"]')) t.addEventListener("click", () => {
-    for (const u of document.querySelectorAll('[role="tab"]')) { u.setAttribute("aria-selected", u === t ? "true" : "false"); $(u.getAttribute("aria-controls")).hidden = u !== t; }
-  });
+  // ---------- tabs and clock
+  function show(id) {
+    for (const u of document.querySelectorAll('[role="tab"]')) { const on = u.id === id; u.setAttribute("aria-selected", on ? "true" : "false"); $(u.getAttribute("aria-controls")).hidden = !on; }
+    if (id === "t-proj") draw();
+  }
+  for (const t of document.querySelectorAll('[role="tab"]')) t.addEventListener("click", () => show(t.id));
+  const clock = () => { $("clock").textContent = new Date().toLocaleTimeString("en-CA", { hour12: false }); };
+  clock(); setInterval(clock, 1000);
 
-  // ---------- sizing
+  // ---------- 01 projection
+  const C = { bull: css("--green"), base: css("--cyan"), bear: css("--red"), pwv: css("--amber"), ink: css("--ink"), muted: css("--muted"), faint: css("--faint"), line: css("--line"), white: css("--white") };
+  const PRESETS = {
+    memo: { tick: "EXM", price: 50, stop: 35, months: 12, conv: "Medium", vol: 35, bull: [80, 30], base: [62, 50], bear: [35, 20] },
+    ipo: { tick: "NEWCO", price: 28, stop: 21, months: 12, conv: "Medium", vol: 75, bull: [52, 25], base: [31, 45], bear: [16, 30] },
+    def: { tick: "UTIL", price: 64, stop: 56, months: 12, conv: "High", vol: 18, bull: [74, 25], base: [68, 55], bear: [58, 20] },
+  };
+  function preset(p) {
+    $("tick").textContent = p.tick; $("pj-price").value = p.price; $("pj-stop").value = p.stop; $("pj-months").value = p.months; $("pj-conv").value = p.conv; $("pj-vol").value = p.vol;
+    for (const c of ["bull", "base", "bear"]) { $("pj-" + c + "-v").value = p[c][0]; $("pj-" + c + "-p").value = p[c][1]; }
+    draw();
+  }
+  for (const b of document.querySelectorAll("[data-preset]")) b.addEventListener("click", () => preset(PRESETS[b.dataset.preset]));
+
+  function readProjection() {
+    const o = { price: n($("pj-price").value), stop: n($("pj-stop").value), months: Number($("pj-months").value), vol: Number($("pj-vol").value), conviction: $("pj-conv").value };
+    for (const c of ["bull", "base", "bear"]) o[c] = { value: n($("pj-" + c + "-v").value), prob: n($("pj-" + c + "-p").value) ?? 0 };
+    return o;
+  }
+
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = (w, h, inner, label) => '<svg xmlns="' + NS + '" viewBox="0 0 ' + w + " " + h + '" width="' + w + '" height="' + h + '" role="img" aria-label="' + esc(label) + '">' + inner + "</svg>";
+  function ticks(lo, hi, want) {
+    const raw = (hi - lo) / want, mag = Math.pow(10, Math.floor(Math.log10(raw))), step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+    const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(10)); return out;
+  }
+  const line = (xs, ys, stroke, width, extra = "") => '<path d="' + xs.map((x, i) => (i ? "L" : "M") + x.toFixed(1) + "," + ys[i].toFixed(1)).join("") + '" fill="none" stroke="' + stroke + '" stroke-width="' + width + '" stroke-linejoin="round" ' + extra + "/>";
+  const area = (xs, top, bot, fill) => '<path d="' + xs.map((x, i) => (i ? "L" : "M") + x.toFixed(1) + "," + top[i].toFixed(1)).join("") + xs.slice().reverse().map((x, i) => "L" + x.toFixed(1) + "," + bot[bot.length - 1 - i].toFixed(1)).join("") + 'Z" fill="' + fill + '" stroke="none"/>';
+
+  let run = null, hover = null;
+  function fan() {
+    const el = $("fan"), W = Math.max(300, el.clientWidth), narrow = W < 600, H = Math.round(narrow ? Math.max(240, W * 0.78) : Math.min(420, Math.max(260, W * 0.46)));
+    const m = { l: narrow ? 44 : 54, r: narrow ? 92 : 112, t: 16, b: 30 }, pw = W - m.l - m.r, ph = H - m.t - m.b;
+    const all = [].concat(run.bands.p10, run.bands.p90, run.scenario.bull, run.scenario.bear, run.stop ? [run.stop] : []);
+    let lo = Math.min(...all), hi = Math.max(...all); const pad = (hi - lo) * 0.06; lo = Math.max(0, lo - pad); hi += pad;
+    const X = (t) => m.l + pw * t / run.months, Y = (v) => m.t + ph * (1 - (v - lo) / (hi - lo)), xs = run.t.map(X);
+    let s = "";
+    for (const v of ticks(lo, hi, 6)) s += '<line x1="' + m.l + '" x2="' + (m.l + pw) + '" y1="' + Y(v) + '" y2="' + Y(v) + '" stroke="' + C.line + '"/><text x="' + (m.l - 8) + '" y="' + (Y(v) + 4) + '" text-anchor="end" font-size="10.5" fill="' + C.muted + '">$' + fmt(v, v < 10 ? 2 : 0) + "</text>";
+    const mt = run.months <= 6 ? 1 : run.months <= 12 ? 3 : 6;
+    for (let t = 0; t <= run.months; t += mt) s += '<line x1="' + X(t) + '" x2="' + X(t) + '" y1="' + m.t + '" y2="' + (m.t + ph) + '" stroke="' + C.line + '" stroke-dasharray="2 4"/><text x="' + X(t) + '" y="' + (H - 10) + '" text-anchor="middle" font-size="10.5" fill="' + C.muted + '">' + (t ? "+" + t + "M" : "NOW") + "</text>";
+    s += area(xs, run.bands.p90.map(Y), run.bands.p10.map(Y), "rgba(34,211,238,.10)") + area(xs, run.bands.p75.map(Y), run.bands.p25.map(Y), "rgba(34,211,238,.20)");
+    s += line(xs, run.bands.p50.map(Y), C.base, 1, 'stroke-dasharray="3 3" opacity=".6"');
+    if (run.stop) s += '<line x1="' + m.l + '" x2="' + (m.l + pw) + '" y1="' + Y(run.stop) + '" y2="' + Y(run.stop) + '" stroke="' + C.bear + '" stroke-width="1.2" stroke-dasharray="6 4"/>';
+    for (const c of ["bear", "base", "bull"]) s += line(xs, run.scenario[c].map(Y), C[c], 1.6, 'opacity=".9"');
+    s += line(xs, run.weighted.map(Y), C.pwv, 2.6, 'style="filter:drop-shadow(0 0 4px rgba(251,191,36,.6))"');
+    s += '<circle cx="' + X(0) + '" cy="' + Y(run.price) + '" r="4" fill="' + C.white + '"/>';
+    // end labels, nudged apart so they never overlap
+    const labels = [["bull", run.scenario.bull.at(-1), "BULL"], ["base", run.scenario.base.at(-1), "BASE"], ["bear", run.scenario.bear.at(-1), "BEAR"], ["pwv", run.pwv, "PWV"]].concat(run.stop ? [["bear", run.stop, "STOP"]] : [])
+      .map(([c, v, name]) => ({ c, v, name, y: Y(v) })).sort((a, b) => a.y - b.y);
+    for (let i = 1; i < labels.length; i++) if (labels[i].y - labels[i - 1].y < 14) labels[i].y = labels[i - 1].y + 14;
+    const over = labels.at(-1).y - (m.t + ph); if (over > 0) for (const l of labels) l.y -= over;
+    for (const l of labels) s += '<text x="' + (m.l + pw + 8) + '" y="' + (l.y + 4) + '" font-size="10.5" font-weight="700" fill="' + C[l.c] + '">' + l.name + " $" + fmt(l.v) + "</text>";
+    if (hover !== null) s += '<line x1="' + xs[hover] + '" x2="' + xs[hover] + '" y1="' + m.t + '" y2="' + (m.t + ph) + '" stroke="' + C.white + '" stroke-opacity=".5"/>' +
+      ["bull", "base", "bear"].map((c) => '<circle cx="' + xs[hover] + '" cy="' + Y(run.scenario[c][hover]) + '" r="3" fill="' + C[c] + '"/>').join("") + '<circle cx="' + xs[hover] + '" cy="' + Y(run.weighted[hover]) + '" r="3.5" fill="' + C.pwv + '"/>';
+    s += '<rect x="' + m.l + '" y="' + m.t + '" width="' + pw + '" height="' + ph + '" fill="transparent" data-hit="1"/>';
+    const i = hover ?? run.t.length - 1, t = run.t[i];
+    el.innerHTML = svg(W, H, s, "Projected price over " + run.months + " months: probability-weighted value $" + fmt(run.pwv) + ", 80% of paths end between $" + fmt(run.range80[0]) + " and $" + fmt(run.range80[1])) +
+      '<div class="readout' + (narrow ? ' below">' : '" style="left:' + (m.l + 10) + 'px">') + '<div><span>' + (t ? "+" + fmt(t, t % 1 ? 1 : 0) + " MONTHS" : "NOW") + "</span></div>" +
+      [["BULL", run.scenario.bull[i], "c-bull"], ["BASE", run.scenario.base[i], "c-base"], ["BEAR", run.scenario.bear[i], "c-bear"], ["PWV", run.weighted[i], ""]].map(([k, v, cl]) =>
+        '<div><span class="' + cl + '"' + (k === "PWV" ? ' style="color:var(--amber)"' : "") + ">" + k + "</span><b>$" + fmt(v) + "</b></div>").join("") +
+      "<div><span>25–75%</span><b>$" + fmt(run.bands.p25[i]) + "–" + fmt(run.bands.p75[i]) + "</b></div><div><span>10–90%</span><b>$" + fmt(run.bands.p10[i]) + "–" + fmt(run.bands.p90[i]) + "</b></div></div>";
+    const hit = el.querySelector("[data-hit]"), pick = (e) => {
+      const r = el.querySelector("svg").getBoundingClientRect(), x = (e.clientX - r.left) * W / r.width;
+      const k = Math.round((x - m.l) / pw * (run.t.length - 1)); hover = Math.max(0, Math.min(run.t.length - 1, k)); fan();
+    };
+    hit.addEventListener("pointermove", pick); hit.addEventListener("pointerdown", pick);
+    hit.addEventListener("pointerleave", () => { hover = null; fan(); });
+  }
+
+  function hist() {
+    const el = $("hist"), W = Math.max(280, el.clientWidth), H = 210, m = { l: 10, r: 10, t: 24, b: 30 }, pw = W - m.l - m.r, ph = H - m.t - m.b;
+    const h = run.histogram, hiX = h.lo + h.width * h.counts.length, peak = Math.max(...h.counts, 1);
+    const X = (v) => m.l + pw * (v - h.lo) / (hiX - h.lo), bw = pw / h.counts.length;
+    let s = "";
+    h.counts.forEach((k, i) => {
+      const mid = h.edges[i] + h.width / 2, fill = run.stop && mid < run.stop ? C.bear : mid < run.price ? C.faint : C.bull;
+      const bh = ph * k / peak; s += '<rect x="' + (m.l + i * bw + 1).toFixed(1) + '" y="' + (m.t + ph - bh).toFixed(1) + '" width="' + Math.max(1, bw - 2).toFixed(1) + '" height="' + bh.toFixed(1) + '" fill="' + fill + '" opacity=".85"/>';
+    });
+    s += '<line x1="' + m.l + '" x2="' + (m.l + pw) + '" y1="' + (m.t + ph) + '" y2="' + (m.t + ph) + '" stroke="' + C.line + '"/>';
+    const marks = [["NOW", run.price, C.white], ["PWV", run.pwv, C.pwv]].concat(run.stop ? [["STOP", run.stop, C.bear]] : []).filter(([, v]) => v >= h.lo && v <= hiX);
+    marks.forEach(([name, v, col], i) => { const x = X(v); s += '<line x1="' + x + '" x2="' + x + '" y1="' + (m.t - 4) + '" y2="' + (m.t + ph) + '" stroke="' + col + '" stroke-dasharray="3 3"/><text x="' + x + '" y="' + (m.t - 8 - (i % 2) * 0) + '" text-anchor="' + (x > W - 60 ? "end" : x < 60 ? "start" : "middle") + '" font-size="10" font-weight="700" fill="' + col + '">' + name + "</text>"; });
+    for (const v of ticks(h.lo, hiX, 5)) s += '<text x="' + X(v) + '" y="' + (H - 10) + '" text-anchor="middle" font-size="10" fill="' + C.muted + '">$' + fmt(v, 0) + "</text>";
+    el.innerHTML = svg(W, H, s, "Distribution of ending prices: " + Math.round(100 * run.p_end_above_price) + "% end above today's price") +
+      '<p class="note" style="margin-top:4px"><span class="c-bull">■</span> above today ' + Math.round(100 * run.p_end_above_price) + "% · " +
+      (run.stop ? '<span class="c-bear">■</span> below the stop ' + Math.round(100 * run.p_end_below_stop) + "% at the end, " + Math.round(100 * run.p_touch_stop) + "% touch it on the way" : "no stop set") + "</p>";
+  }
+
+  function gauge() {
+    const el = $("gauge"), W = Math.max(280, el.clientWidth), H = 120, m = { l: 12, r: 12 }, pw = W - m.l - m.r, lo = -50, hi = 80;
+    const X = (v) => m.l + pw * (Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo), y = 46, er = run.expected_return_pct;
+    let s = '<rect x="' + X(lo) + '" y="' + y + '" width="' + (X(-10) - X(lo)) + '" height="14" fill="' + C.bear + '" opacity=".35"/>' +
+      '<rect x="' + X(-10) + '" y="' + y + '" width="' + (X(15) - X(-10)) + '" height="14" fill="' + C.faint + '" opacity=".45"/>' +
+      '<rect x="' + X(15) + '" y="' + y + '" width="' + (X(hi) - X(15)) + '" height="14" fill="' + C.bull + '" opacity=".35"/>';
+    for (let v = lo; v <= hi; v += 10) s += '<line x1="' + X(v) + '" x2="' + X(v) + '" y1="' + (y + 14) + '" y2="' + (y + (v % 50 ? 18 : 22)) + '" stroke="' + C.muted + '"/>';
+    for (const v of [-10, 15]) s += '<text x="' + X(v) + '" y="' + (y + 34) + '" text-anchor="middle" font-size="10" fill="' + C.muted + '">' + (v > 0 ? "+" : "") + v + "%</text>";
+    s += '<text x="' + X(-30) + '" y="' + (y - 8) + '" text-anchor="middle" font-size="9.5" fill="' + C.bear + '">UNDERWEIGHT</text><text x="' + X(2.5) + '" y="' + (y - 8) + '" text-anchor="middle" font-size="9.5" fill="' + C.muted + '">EQUAL-WEIGHT</text><text x="' + X(47) + '" y="' + (y - 8) + '" text-anchor="middle" font-size="9.5" fill="' + C.bull + '">OVERWEIGHT</text>';
+    const x = X(er), col = run.rating === "Overweight" ? C.bull : run.rating === "Underweight" ? C.bear : C.white;
+    s += '<path d="M' + x + "," + (y + 16) + "l-7,12h14z" + '" fill="' + col + '"/><line x1="' + x + '" x2="' + x + '" y1="' + (y - 2) + '" y2="' + (y + 16) + '" stroke="' + col + '" stroke-width="2"/>' +
+      '<text x="' + Math.max(40, Math.min(W - 40, x)) + '" y="' + (y + 50) + '" text-anchor="middle" font-size="12" font-weight="800" fill="' + col + '">' + pct(er) + "</text>";
+    el.innerHTML = svg(W, H, s, "Expected return " + pct(er) + ": " + run.rating);
+    const conv = $("pj-conv").value;
+    $("gauge-note").innerHTML = "Expected return " + pct(er) + " with " + conv.toLowerCase() + " conviction → <b>" + run.rating + "</b>." +
+      (er >= 15 && conv === "Low" ? " Low conviction caps it at Equal-weight." : "") + " Overweight needs +15% and medium or high conviction; Underweight is −10% or worse.";
+  }
+
+  function tiles() {
+    const er = run.expected_return_pct, cls = er >= 15 ? "up" : er <= -10 ? "dn" : "";
+    const T = [["PWV", "$" + fmt(run.pwv), "hi"], ["Exp. return", pct(er), cls], ["Rating", run.rating.toUpperCase(), cls],
+      ["80% of paths end", "$" + fmt(run.range80[0], 0) + "–" + fmt(run.range80[1], 0), ""],
+      ["P(touch stop)", run.stop ? Math.round(100 * run.p_touch_stop) + "%" : "—", run.p_touch_stop > 0.3 ? "dn" : ""],
+      ["P(end > now)", Math.round(100 * run.p_end_above_price) + "%", run.p_end_above_price > 0.5 ? "up" : "dn"]];
+    $("pj-tiles").innerHTML = T.map(([k, v, c]) => '<div class="tile"><span class="k">' + k + '</span><span class="v ' + c + '">' + v + "</span></div>").join("");
+    $("pj-sub").textContent = run.months + "M · VOL " + run.vol + "% · SEED 1";
+    const t = $("tick").textContent, items = [
+      [t + " LAST", "$" + fmt(run.price), ""], ["PWV", "$" + fmt(run.pwv), ""], ["E[R]", pct(er), er >= 0 ? "up" : "dn"], ["RATING", run.rating.toUpperCase(), cls],
+      ["BULL", "$" + fmt(run.scenario.bull.at(-1)), "up"], ["BASE", "$" + fmt(run.scenario.base.at(-1)), ""], ["BEAR", "$" + fmt(run.scenario.bear.at(-1)), "dn"],
+      ["P10–P90", "$" + fmt(run.range80[0]) + "–" + fmt(run.range80[1]), ""], ["STOP", run.stop ? "$" + fmt(run.stop) : "—", "dn"],
+      ["P(TOUCH STOP)", run.stop ? Math.round(100 * run.p_touch_stop) + "%" : "—", ""], ["PATHS", "2,000", ""], ["API", "OFF", ""], ["CHECKS", "11 RULES", ""]];
+    const one = items.map(([k, v, c]) => "<span>" + k + ' <b class="' + c + '">' + v + "</b></span>").join("");
+    $("tape").innerHTML = one + one;
+  }
+
+  let queued = false;
+  function draw() {
+    if (queued) return; queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      const o = readProjection(), total = ["bull", "base", "bear"].reduce((a, c) => a + (o[c].prob || 0), 0);
+      $("pj-sum").textContent = "Σ PROB " + fmt(total, 0) + "%" + (Math.abs(total - 100) < 0.01 ? " ✓" : " — must be 100%");
+      $("pj-sum").classList.toggle("bad", Math.abs(total - 100) >= 0.01);
+      $("pj-vol-out").textContent = o.vol + "% a year";
+      try { run = IpoCore.project(o); }
+      catch (e) { run = null; $("fan").innerHTML = '<p class="err">✗ ' + esc(e.message) + "</p>"; $("hist").innerHTML = $("gauge").innerHTML = $("pj-tiles").innerHTML = ""; $("gauge-note").textContent = ""; return; }
+      tiles();                         // the ticker follows the numbers even while another tab is open
+      if ($("p-proj").hidden) return;
+      fan(); hist(); gauge();
+    });
+  }
+  $("p-proj").addEventListener("input", draw);
+  $("p-proj").addEventListener("change", draw);
+  new ResizeObserver(() => { if (run && !$("p-proj").hidden) { fan(); hist(); gauge(); } }).observe($("fan"));
+
+  // ---------- 02 sizing
   const EXAMPLE = { as_of: "2026-10-01", cash: 4000, holdings: [
     { symbol: "AAA", shares: 20, cost_basis: 150, sector: "Technology", price: 180 },
     { symbol: "BBB", shares: 40, cost_basis: 50, sector: "Financials", price: 55 },
@@ -146,7 +458,6 @@ a { color: var(--accent); }
   }
   $("cash").value = EXAMPLE.cash; $("r-pos").value = EXAMPLE.rules.max_position_pct; $("r-sec").value = EXAMPLE.rules.max_sector_pct;
   $("r-risk").value = EXAMPLE.rules.risk_per_trade_pct; $("r-cash").value = EXAMPLE.rules.min_cash_pct;
-  const n = (v) => v === "" ? undefined : Number(v);
 
   function readPortfolio() {
     const holdings = [...body.rows].map((tr) => Object.fromEntries([...tr.querySelectorAll("input")].map((i) => [i.dataset.k, i.value.trim()])))
@@ -159,24 +470,31 @@ a { color: var(--accent); }
     const out = $("result"), br = $("breaches");
     try {
       const view = IpoCore.valued(IpoCore.validate(readPortfolio()));
-      br.innerHTML = view.rule_breaches.map((b) => '<p class="breach">' + (b.rule === "max_position_pct" ? esc(b.symbol) + " is " + b.weight_pct + "% of the portfolio, over the cap: trim " + b.shares_over + " shares."
+      br.innerHTML = view.rule_breaches.map((b) => '<p class="breach">▲ ' + (b.rule === "max_position_pct" ? esc(b.symbol) + " is " + b.weight_pct + "% of the portfolio, over the cap: trim " + b.shares_over + " shares."
         : b.rule === "max_sector_pct" ? esc(b.sector) + " is " + b.weight_pct + "%, over the sector cap." : "Cash is " + b.cash_pct + "%, under the floor.") + "</p>").join("") +
-        (view.unpriced.length ? '<p class="breach">No price for ' + esc(view.unpriced.join(", ")) + ": left out of the totals.</p>" : "");
+        (view.unpriced.length ? '<p class="breach">▲ No price for ' + esc(view.unpriced.join(", ")) + ": left out of the totals.</p>" : "");
       const s = IpoCore.sizePosition(view, $("sym").value || "NEW", n($("entry").value), n($("stop").value), $("conv").value, $("sector").value.trim() || null);
       const max = Math.max(...Object.values(s.limits_in_shares), 1);
-      const names = { risk: "Risk", position: "Position", sector: "Sector", cash: "Cash" };
-      out.innerHTML = '<div class="big">' + s.shares + ' shares</div><p class="muted" style="margin:6px 0 0">$' + fmt(s.cost) + " at $" + fmt(s.entry_price) +
-        ". If it falls to the stop-working price of $" + fmt(s.stop_price) + ", you lose $" + fmt(s.loss_at_stop) + " of a $" + fmt(s.risk_budget) + " risk budget. " +
-        esc(s.symbol) + " becomes " + s.weight_after_pct + "% of the portfolio; $" + fmt(s.cash_after) + " cash is left.</p>" +
-        '<div class="bars">' + Object.entries(s.limits_in_shares).map(([k, v]) => '<div class="bar' + (k === s.binding_rule ? " bind" : "") + '"><span>' + names[k] +
-        '</span><div class="track"><div class="fill" style="width:' + Math.max(2, 100 * Math.max(0, v) / max) + '%"></div></div><span>' + v + " sh</span></div>").join("") +
-        '</div><p class="muted">The smallest limit wins: <b>' + names[s.binding_rule].toLowerCase() + "</b>. Portfolio value $" + fmt(view.equity) + ".</p>";
-    } catch (e) { br.innerHTML = ""; out.innerHTML = '<p class="err">' + esc(e.message) + "</p>"; }
+      const names = { risk: "RISK", position: "POSITION", sector: "SECTOR", cash: "CASH" };
+      out.innerHTML = '<span class="k">Buy</span><div class="big">' + s.shares + ' <span style="font-size:1rem;color:var(--muted)">SHARES</span></div>' +
+        '<div class="tiles quad" style="margin-top:12px"><div class="tile"><span class="k">Cost</span><span class="v">$' + fmt(s.cost) + '</span></div>' +
+        '<div class="tile"><span class="k">Loss at stop</span><span class="v dn">$' + fmt(s.loss_at_stop) + ' <small>of $' + fmt(s.risk_budget) + "</small></span></div>" +
+        '<div class="tile"><span class="k">Weight after</span><span class="v">' + s.weight_after_pct + '%</span></div><div class="tile"><span class="k">Cash after</span><span class="v">$' + fmt(s.cash_after) + "</span></div></div>" +
+        '<div class="bars">' + Object.entries(s.limits_in_shares).map(([k, v]) => '<div class="bar' + (k === s.binding_rule ? " bind" : "") + '"><span>' + (k === s.binding_rule ? "▸ " : "") + names[k] +
+        '</span><div class="track"><div class="fill" style="width:' + Math.max(2, 100 * Math.max(0, v) / max) + '%"></div></div><span>' + v + " SH</span></div>").join("") +
+        '</div><p class="note">' + esc(s.symbol) + " at $" + fmt(s.entry_price) + ", stop-working $" + fmt(s.stop_price) + ". The smallest limit wins: <b>" + names[s.binding_rule].toLowerCase() +
+        "</b>. Portfolio value $" + fmt(view.equity) + ".</p>";
+    } catch (e) { br.innerHTML = ""; out.innerHTML = '<p class="err">✗ ' + esc(e.message) + "</p>"; }
   }
-  document.querySelector("#p-size").addEventListener("input", size);
+  $("p-size").addEventListener("input", size);
   size();
 
-  // ---------- memo checks
+  $("to-size").addEventListener("click", () => {
+    $("sym").value = $("tick").textContent; $("entry").value = $("pj-price").value; $("stop").value = $("pj-stop").value; $("conv").value = $("pj-conv").value;
+    size(); show("t-size");
+  });
+
+  // ---------- 03 memo checks
   const GOOD = { key_numbers: {
     subject: { company: "Example Corp", ticker: "EXM", exchange: "NYSE", share_class: "common", type: "listed" }, as_of: "2026-10-06",
     inputs: {
@@ -196,23 +514,35 @@ a { color: var(--accent); }
     rating: (k) => { k.scenarios.bull.prob = 15; k.scenarios.base.prob = 50; k.scenarios.bear.prob = 35; k.scenarios.pwv = 55.25; k.scenarios.expected_return_pct = 10.5; return k; },
     stale: (k) => { k.inputs.price.as_of = "2026-09-25"; return k; },
   };
+  const memoText = () => $("memo").value.includes("```json") ? $("memo").value : "```json\n" + $("memo").value + "\n```";
   function load(which) {
     const k = variants[which](JSON.parse(JSON.stringify(GOOD.key_numbers)));
     $("memo").value = "```json\n" + JSON.stringify({ key_numbers: k }, null, 1) + "\n```";
     checkNow();
   }
   function checkNow() {
-    const text = $("memo").value.includes("```json") ? $("memo").value : "```json\n" + $("memo").value + "\n```";
-    const res = IpoCore.checkMemo(text), bad = res.filter((r) => !r[1]);
-    $("score").textContent = bad.length ? bad.length + " of " + res.length + " checks fail" : "All " + res.length + " checks pass";
-    $("score").style.color = bad.length ? "var(--bad)" : "var(--good)";
+    const res = IpoCore.checkMemo(memoText()), bad = res.filter((r) => !r[1]);
+    $("score").textContent = bad.length ? "✗ " + bad.length + " OF " + res.length + " CHECKS FAIL" : "✓ ALL " + res.length + " CHECKS PASS";
+    $("score").style.color = bad.length ? "var(--red)" : "var(--green)";
     $("checks").innerHTML = res.sort((a, b) => a[1] - b[1]).map(([name, ok, detail]) => '<li class="' + (ok ? "ok" : "no") + '">' + esc(name) +
       (!ok && detail ? "<small>" + esc(detail) + "</small>" : "") + "</li>").join("");
+    $("to-proj-err").textContent = "";
   }
   for (const b of document.querySelectorAll("[data-load]")) b.addEventListener("click", () => load(b.dataset.load));
   $("memo").addEventListener("input", checkNow);
+  $("to-proj").addEventListener("click", () => {
+    try {
+      const k = IpoCore.extract(memoText()), sc = k.scenarios || {};
+      const price = sc.reference_price ?? (k.inputs && k.inputs.price && k.inputs.price.value);
+      if (!price || !sc.bull || !sc.base || !sc.bear) throw new Error("the block needs a reference price and bull, base and bear cases");
+      preset({ tick: (k.subject && k.subject.ticker) || "MEMO", price, stop: k.stop_working_price ?? "", months: 12, conv: k.conviction || "Medium", vol: Number($("pj-vol").value),
+        bull: [sc.bull.value, sc.bull.prob], base: [sc.base.value, sc.base.prob], bear: [sc.bear.value, sc.bear.prob] });
+      show("t-proj");
+    } catch (e) { $("to-proj-err").textContent = "✗ " + e.message; }
+  });
+
   load(location.hash === "#check" ? "rating" : "good");
-  if (location.hash === "#check") $("t-check").click();
+  if (location.hash === "#check") show("t-check"); else if (location.hash === "#size") show("t-size"); else draw();
 })();
 </script>
 </body>
