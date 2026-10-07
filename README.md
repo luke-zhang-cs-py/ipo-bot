@@ -66,6 +66,18 @@ python kit.py regress --yes                # the test kit, live: calculation cas
 The test kit (`kit.py`, `testkit/`) also has a golden-set template, a consistency test, and a no-hindsight IPO
 backtest that cuts the data tools off at the day before pricing.
 
+## Layout
+
+```
+ipo_bot.py  tools.py  portfolio.py   the bot, its data tools, portfolio sizing
+checks.py  verify.py  audit.py       accuracy checks, KEY NUMBERS recompute, second-pass audit
+kit.py  track.py                     the test kit and the forecast ledger
+prompts/                             the system and auditor prompts
+evaluation/                          benchmark, calibration, robustness, stress test
+testkit/  tests/                     test-kit cases and the pytest suite
+docs/                                the write-up and the browser demo (GitHub Pages)
+```
+
 ## Limits
 
 - No live run is recorded: every live test needs an API key and costs credit.
