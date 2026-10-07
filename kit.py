@@ -51,7 +51,7 @@ def run_dir(suite):
 
 
 def prompt_fingerprint():
-    return hashlib.sha256((HERE / "system_prompt.md").read_bytes()).hexdigest()[:12]
+    return hashlib.sha256((HERE / "prompts" / "system_prompt.md").read_bytes()).hexdigest()[:12]
 
 
 # ----------------------------------------------------------------------------- running the bot

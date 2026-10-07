@@ -439,7 +439,7 @@ def portfolio_size(symbol, entry_price, stop_price, conviction, sector=None):
 
 # ----------------------------------------------------------------------------- forecast ledger
 
-# Each rating is logged so benchmark.py --ledger can score it against simple algorithms once it matures.
+# Each rating is logged so evaluation/benchmark.py --ledger can score it against simple algorithms once it matures.
 LEDGER = pathlib.Path(__file__).resolve().parent / "forecasts" / "ledger.jsonl"
 
 
@@ -482,7 +482,7 @@ def record_forecast(symbol, rating, expected_return_pct, price, price_date, hori
     LEDGER.parent.mkdir(exist_ok=True)
     with LEDGER.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
-    return _result("forecasts/ledger.jsonl", entry, "logged; score it later with benchmark.py --ledger")
+    return _result("forecasts/ledger.jsonl", entry, "logged; score it later with evaluation/benchmark.py --ledger")
 
 
 HANDLERS = {"edgar_lookup": edgar_lookup, "edgar_filings": edgar_filings, "edgar_document": edgar_document,

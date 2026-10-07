@@ -5,6 +5,7 @@ import sys
 import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "evaluation"))
 
 import benchmark as bm  # noqa: E402
 import robustness as rb  # noqa: E402

@@ -102,7 +102,7 @@ def test_tool_definitions_are_valid_and_match_the_handlers():
 
 
 def test_the_prompt_names_every_tool_the_bot_has():
-    prompt = (pathlib.Path(ipo_bot.HERE) / "system_prompt.md").read_text(encoding="utf-8")
+    prompt = (pathlib.Path(ipo_bot.HERE) / "prompts" / "system_prompt.md").read_text(encoding="utf-8")
     for t in tools.TOOL_DEFS + [ipo_bot.WEB_SEARCH]:
         assert t["name"] in prompt, t["name"]
 

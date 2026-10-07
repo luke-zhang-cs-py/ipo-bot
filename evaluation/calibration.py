@@ -1,7 +1,7 @@
 """Calibration: do the forecasts mean what they say?
 
-    python calibration.py              all universes, 12-month and 1-month horizons
-    python calibration.py --ledger     also calibrate the bot's own matured forecasts (forecasts/ledger.jsonl)
+    python evaluation/calibration.py              all universes, 12-month and 1-month horizons
+    python evaluation/calibration.py --ledger     also calibrate the bot's own matured forecasts (forecasts/ledger.jsonl)
 
 benchmark.py asks whether an algorithm ranks stocks in the right order. This asks whether its numbers can be
 taken at face value, which is what the bot's memos ask of a reader. Each algorithm is turned into three kinds of
@@ -38,7 +38,7 @@ BINS = 5                    # the ranking is cut into fifths for the probability
 MIN_TRAIN_DATES = 36        # months of matured outcomes before the first forecast
 RANGES = {50: (0.25, 0.75), 80: (0.10, 0.90), 90: (0.05, 0.95)}
 Z80 = 1.2816
-OVERWEIGHT, UNDERWEIGHT = 0.15, -0.10      # the bot's rating thresholds (system_prompt.md)
+OVERWEIGHT, UNDERWEIGHT = 0.15, -0.10      # the bot's rating thresholds (prompts/system_prompt.md)
 BLEND, RANDOM = "Blend (mom+trend+lowvol)", "Random (no skill)"
 
 
@@ -420,7 +420,7 @@ def main(argv):
         except (AttributeError, ValueError):
             pass
     text = report(refresh="--refresh" in argv, ledger="--ledger" in argv)
-    runs = bm.HERE / "bench_runs"
+    runs = bm.ROOT / "bench_runs"
     runs.mkdir(exist_ok=True)
     path = runs / f"calibration_{dt.datetime.now():%Y-%m-%d_%H%M%S}.md"
     path.write_text(text, encoding="utf-8")

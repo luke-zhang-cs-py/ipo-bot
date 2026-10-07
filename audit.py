@@ -19,7 +19,7 @@ import ipo_bot
 import verify
 
 HERE = pathlib.Path(__file__).resolve().parent
-AUDITOR = (HERE / "auditor_prompt.md").read_text(encoding="utf-8")
+AUDITOR = (HERE / "prompts" / "auditor_prompt.md").read_text(encoding="utf-8")
 RULES = [f"A{n}" for n in range(1, 12)]
 SOURCES_CHARS = 120_000
 

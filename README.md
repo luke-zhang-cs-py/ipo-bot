@@ -43,7 +43,7 @@ on 30 US large caps, 15 country ETFs and the 9 US sector ETFs, each seeing only 
 | 12-month 80% ranges | held the outcome only 70% to 77% of the time |
 
 Simple price signals give no 12-month edge that holds up, and ranges drawn from history are too narrow; both findings
-went back into the prompt. Details: `benchmark.py`, `calibration.py`, `robustness.py`.
+went back into the prompt. Details: [`evaluation/`](evaluation/).
 
 ## Run it
 

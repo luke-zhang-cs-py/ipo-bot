@@ -1,6 +1,6 @@
 """Does anything survive? Three harder tests on the benchmark's algorithms.
 
-    python robustness.py
+    python evaluation/robustness.py
 
 1. Multiple testing. Six algorithms x three universes x two horizons is 36 tests: at a 5% bar, about two
    pass by luck alone. Each gets a permutation p-value (its own scores handed to the wrong stocks, 1,000
@@ -162,7 +162,7 @@ def main():
         except (AttributeError, ValueError):
             pass
     text = report()
-    runs = bm.HERE / "bench_runs"
+    runs = bm.ROOT / "bench_runs"
     runs.mkdir(exist_ok=True)
     path = runs / f"robustness_{dt.datetime.now():%Y-%m-%d_%H%M%S}.md"
     path.write_text(text, encoding="utf-8")

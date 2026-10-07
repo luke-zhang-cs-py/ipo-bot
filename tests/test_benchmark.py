@@ -8,6 +8,7 @@ import sys
 import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "evaluation"))
 
 import benchmark  # noqa: E402
 import tools  # noqa: E402
@@ -94,7 +95,7 @@ def test_the_ledger_scores_matured_forecasts_and_lists_pending(tmp_path, monkeyp
 
 
 def test_the_stress_test_keeps_its_forecasts_out_of_the_real_ledger():
-    src = (pathlib.Path(__file__).resolve().parents[1] / "stress_test.py").read_text(encoding="utf-8")
+    src = (pathlib.Path(__file__).resolve().parents[1] / "evaluation" / "stress_test.py").read_text(encoding="utf-8")
     assert 'tools.LEDGER = out / "ledger.jsonl"' in src
 
 

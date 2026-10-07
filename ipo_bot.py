@@ -64,7 +64,7 @@ WEB_SEARCH = {"type": "web_search_20260209", "name": "web_search", "max_uses": 1
 BOSTON = zoneinfo.ZoneInfo("America/New_York")
 SOURCE_CHARS = 6000        # how much of each tool result is kept for the auditor
 
-SYSTEM = (HERE / "system_prompt.md").read_text(encoding="utf-8")
+SYSTEM = (HERE / "prompts" / "system_prompt.md").read_text(encoding="utf-8")
 
 
 def tools(web=True):

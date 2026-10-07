@@ -1,8 +1,8 @@
 """Walk-forward tests of simple prediction algorithms, month after month, on real prices.
 
-    python benchmark.py                 both universes, 12-month and 1-month horizons
-    python benchmark.py --refresh       fetch prices again instead of using today's cache
-    python benchmark.py --ledger        also score the bot's own logged forecasts (forecasts/ledger.jsonl)
+    python evaluation/benchmark.py                 both universes, 12-month and 1-month horizons
+    python evaluation/benchmark.py --refresh       fetch prices again instead of using today's cache
+    python evaluation/benchmark.py --ledger        also score the bot's own logged forecasts (forecasts/ledger.jsonl)
 
 Every month-end, each algorithm sees only the prices up to that day and predicts which stocks will do best
 over the next 12 months (the bot's horizon) and the next month. The prediction is then scored against what
@@ -35,9 +35,9 @@ try:
 except ImportError:
     pass
 
-HERE = pathlib.Path(__file__).resolve().parent
-CACHE = HERE / "bench_data"
-LEDGER = HERE / "forecasts" / "ledger.jsonl"
+ROOT = pathlib.Path(__file__).resolve().parents[1]   # caches, runs and the ledger live at the repo root
+CACHE = ROOT / "bench_data"
+LEDGER = ROOT / "forecasts" / "ledger.jsonl"
 START = dt.date(2004, 1, 1)
 BLOCK_YEARS = 3
 
@@ -363,7 +363,7 @@ def main(argv):
         except (AttributeError, ValueError):
             pass
     text = report(refresh="--refresh" in argv, ledger="--ledger" in argv)
-    runs = HERE / "bench_runs"
+    runs = ROOT / "bench_runs"
     runs.mkdir(exist_ok=True)
     path = runs / f"{dt.datetime.now():%Y-%m-%d_%H%M%S}.md"
     path.write_text(text, encoding="utf-8")
