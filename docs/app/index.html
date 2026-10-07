@@ -96,7 +96,7 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
 .tiles { display: grid; gap: 1px; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .tile { background: var(--panel); padding: 10px 12px; min-width: 0; }
 .tiles.quad { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.panel.proj > .card { align-self: start; }
+.panel.proj > .stack:first-child { align-self: start; }
 .k { display: block; font-size: .64rem; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
 .v { display: block; font-size: 1.28rem; font-weight: 800; color: var(--white); font-variant-numeric: tabular-nums; line-height: 1.25; }
 .v small { font-size: .7rem; font-weight: 500; color: var(--muted); }
@@ -149,6 +149,21 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
 #cmp .rank { color: var(--faint); font-weight: 800; }
 #cmp .x { all: unset; cursor: pointer; color: var(--faint); padding: 0 4px; }
 #cmp .x:hover { color: var(--red); }
+.nyse-tools { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.nyse-tools label:first-child { grid-column: 1 / -1; }
+.picks { list-style: none; margin: 10px 0 0; padding: 0; max-height: 300px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; }
+.picks li { display: grid; grid-template-columns: 4.6rem minmax(0, 1fr); gap: 2px 8px; padding: 6px 9px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.picks li:last-child { border-bottom: 0; }
+.picks li:hover, .picks li[aria-selected="true"] { background: var(--panel-2); }
+.picks li[aria-selected="true"] { box-shadow: inset 2px 0 0 var(--cyan); }
+.picks b { font: 700 .8rem var(--mono); color: var(--cyan); }
+.picks span { font-size: .8rem; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picks small { grid-column: 2; font: .66rem var(--mono); color: var(--faint); letter-spacing: .04em; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picked { margin: 10px 0 0; padding: 8px 10px; border: 1px dashed var(--line-hi); border-radius: 6px; font-size: .8rem; color: var(--muted); }
+.picked b { color: var(--white); }
+.chip-t { font: 700 .62rem var(--mono); letter-spacing: .08em; color: #031015; background: var(--amber); border-radius: 3px; padding: 1px 5px; margin-left: 6px; vertical-align: 1px; }
+.prompt { padding: 28px 8px; text-align: center; color: var(--muted); font: .85rem var(--mono); }
+.prompt b { color: var(--white); }
 .foot { margin-top: 22px; color: var(--faint); font: .72rem var(--mono); letter-spacing: .04em; }
 @media (prefers-reduced-motion: reduce) { .cursor, .tape .run { animation: none; } }
 @media (max-width: 560px) { .grid2 { grid-template-columns: minmax(0, 1fr); } .chips { margin-left: 0; } }
@@ -185,8 +200,21 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
 
   <!-- 01 projection -->
   <section id="p-proj" class="panel proj" role="tabpanel" aria-labelledby="t-proj">
+    <div class="stack" style="align-self:start">
     <div class="card">
-      <div class="ph"><h2><i>01.1</i>Scenarios</h2><small id="tick">EXM</small></div>
+      <div class="ph"><h2><i>01.0</i>NYSE</h2><small id="nyse-count">loading…</small></div>
+      <div class="nyse-tools">
+        <label>Search ticker or company <input id="nyse-q" type="search" autocomplete="off" placeholder="e.g. JPM, Lilly, utilities"
+          role="combobox" aria-controls="nyse-list" aria-expanded="true" aria-autocomplete="list"></label>
+        <label>Sector <select id="nyse-sector"><option value="">All sectors</option></select></label>
+        <label>Sort <select id="nyse-sort"><option value="ticker">Ticker A–Z</option><option value="name">Company A–Z</option><option value="sector">Sector</option></select></label>
+      </div>
+      <ul class="picks" id="nyse-list" role="listbox" aria-label="NYSE companies"></ul>
+      <p class="note" id="nyse-note"></p>
+    </div>
+    <div class="card">
+      <div class="ph"><h2><i>01.1</i>Scenarios</h2><small><span id="tick">EXM</span><span id="tpl" class="chip-t" hidden>TEMPLATE</span></small></div>
+      <div id="picked" class="picked" hidden></div>
       <div class="grid2">
         <label>Price now <input id="pj-price" type="number" step="any" min="0" value="50"></label>
         <label>Stop-working <input id="pj-stop" type="number" step="any" min="0" value="35"></label>
@@ -204,6 +232,7 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
       <p class="sum" id="pj-sum"></p>
       <label style="margin-top:6px">Volatility <span class="mono" id="pj-vol-out" style="color:var(--white)">35% a year</span>
         <input id="pj-vol" type="range" min="5" max="120" step="1" value="35"></label>
+      <div class="row"><button class="btn" id="tpl-fill">Fill a template from the price</button></div>
       <div class="row">
         <button class="btn" data-preset="memo">Example memo</button>
         <button class="btn" data-preset="ipo">Hot IPO</button>
@@ -212,6 +241,7 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
       <div class="row"><button class="btn go" id="to-size">▸ Size this trade</button></div>
       <p class="note">Each of 2,000 simulated paths picks bull, base or bear by its probability, ends near that value and gets there
         with the volatility above. The paths average out at the probability-weighted value; the seed is fixed, so the same inputs draw the same chart.</p>
+    </div>
     </div>
 
     <div class="stack">
@@ -336,7 +366,8 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
   };
   let sector = null;
   function preset(p) {
-    $("tick").textContent = p.tick; sector = p.sector ?? null; $("pj-price").value = p.price; $("pj-stop").value = p.stop; $("pj-months").value = p.months; $("pj-conv").value = p.conv; $("pj-vol").value = p.vol;
+    $("tick").textContent = p.tick; sector = p.sector ?? null;
+    $("tpl").hidden = !p.template; if (!p.company) $("picked").hidden = true; $("pj-price").value = p.price; $("pj-stop").value = p.stop; $("pj-months").value = p.months; $("pj-conv").value = p.conv; $("pj-vol").value = p.vol;
     for (const c of ["bull", "base", "bear"]) { $("pj-" + c + "-v").value = p[c][0]; $("pj-" + c + "-p").value = p[c][1]; }
     draw();
   }
@@ -398,7 +429,7 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
   }
 
   function hist() {
-    const el = $("hist"), W = Math.max(280, el.clientWidth), H = 210, m = { l: 10, r: 10, t: 24, b: 30 }, pw = W - m.l - m.r, ph = H - m.t - m.b;
+    const el = $("hist"), W = Math.max(280, el.clientWidth), H = 220, m = { l: 10, r: 10, t: 34, b: 30 }, pw = W - m.l - m.r, ph = H - m.t - m.b;
     const h = run.histogram, hiX = h.lo + h.width * h.counts.length, peak = Math.max(...h.counts, 1);
     const X = (v) => m.l + pw * (v - h.lo) / (hiX - h.lo), bw = pw / h.counts.length;
     let s = "";
@@ -408,7 +439,13 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
     });
     s += '<line x1="' + m.l + '" x2="' + (m.l + pw) + '" y1="' + (m.t + ph) + '" y2="' + (m.t + ph) + '" stroke="' + C.line + '"/>';
     const marks = [["NOW", run.price, C.white], ["PWV", run.pwv, C.pwv]].concat(run.stop ? [["STOP", run.stop, C.bear]] : []).filter(([, v]) => v >= h.lo && v <= hiX);
-    marks.forEach(([name, v, col], i) => { const x = X(v); s += '<line x1="' + x + '" x2="' + x + '" y1="' + (m.t - 4) + '" y2="' + (m.t + ph) + '" stroke="' + col + '" stroke-dasharray="3 3"/><text x="' + x + '" y="' + (m.t - 8 - (i % 2) * 0) + '" text-anchor="' + (x > W - 60 ? "end" : x < 60 ? "start" : "middle") + '" font-size="10" font-weight="700" fill="' + col + '">' + name + "</text>"; });
+    // labels that would touch drop a line, so NOW, PWV and STOP stay readable when the prices are close
+    const placed = [];
+    marks.sort((p, q) => p[1] - q[1]).forEach(([name, v, col]) => {
+      const x = X(v), prev = placed.at(-1), row = prev && x - prev.x < 38 && prev.row === 0 ? 1 : 0; placed.push({ x, row });
+      s += '<line x1="' + x + '" x2="' + x + '" y1="' + (m.t - 4 - row * 12) + '" y2="' + (m.t + ph) + '" stroke="' + col + '" stroke-dasharray="3 3"/><text x="' + x + '" y="' + (m.t - 8 - row * 12) +
+        '" text-anchor="' + (x > W - 60 ? "end" : x < 60 ? "start" : "middle") + '" font-size="10" font-weight="700" fill="' + col + '">' + name + "</text>";
+    });
     for (const v of ticks(h.lo, hiX, 5)) s += '<text x="' + X(v) + '" y="' + (H - 10) + '" text-anchor="middle" font-size="10" fill="' + C.muted + '">$' + fmt(v, 0) + "</text>";
     el.innerHTML = svg(W, H, s, "Distribution of ending prices: " + Math.round(100 * run.p_end_above_price) + "% end above today's price") +
       '<p class="note" style="margin-top:4px"><span class="c-bull">■</span> above today ' + Math.round(100 * run.p_end_above_price) + "% · " +
@@ -460,7 +497,10 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
       $("pj-sum").classList.toggle("bad", Math.abs(total - 100) >= 0.01);
       $("pj-vol-out").textContent = o.vol + "% a year";
       try { run = IpoCore.project(o); }
-      catch (e) { run = null; $("fan").innerHTML = '<p class="err">✗ ' + esc(e.message) + "</p>"; $("hist").innerHTML = $("gauge").innerHTML = $("pj-tiles").innerHTML = ""; $("gauge-note").textContent = ""; return; }
+      catch (e) {
+        run = null;
+        $("fan").innerHTML = !(o.price > 0) ? '<p class="prompt">Enter <b>' + esc($("tick").textContent) + "</b>'s price, then your bull, base and bear cases,<br>or fill a template from the price.</p>"
+          : '<p class="err">✗ ' + esc(e.message) + "</p>"; $("hist").innerHTML = $("gauge").innerHTML = $("pj-tiles").innerHTML = ""; $("gauge-note").textContent = ""; return; }
       tiles();                         // the ticker follows the numbers even while another tab is open
       if ($("p-proj").hidden) return;
       fan(); hist(); gauge(); compare();
@@ -468,6 +508,71 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
   }
   $("p-proj").addEventListener("input", draw);
   $("p-proj").addEventListener("change", draw);
+  // ---------- 01.0 the NYSE list: every ticker the SEC lists on the NYSE (scripts/build_nyse.py), searched in the page
+  let NYSE = [], shown = [], active = -1;
+  const LIMIT = 200;
+  fetch("nyse.json").then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); }).then((d) => {
+    const f = Object.fromEntries(d.fields.map((k, i) => [k, i]));
+    NYSE = d.rows.map((r) => ({ ticker: r[f.ticker], name: r[f.name], cik: r[f.cik], sector: r[f.sector], industry: r[f.industry],
+      hay: (r[f.ticker] + " " + r[f.name] + " " + r[f.industry] + " " + r[f.sector]).toLowerCase() }));
+    const sectors = [...new Set(NYSE.map((x) => x.sector))].sort();
+    $("nyse-sector").innerHTML = '<option value="">All sectors (' + NYSE.length.toLocaleString("en-CA") + ")</option>" +
+      sectors.map((x) => '<option value="' + esc(x) + '">' + esc(x) + " (" + NYSE.filter((y) => y.sector === x).length + ")</option>").join("");
+    $("nyse-count").textContent = NYSE.length.toLocaleString("en-CA") + " TICKERS · SEC " + d.as_of;
+    search();
+  }).catch(() => {
+    $("nyse-count").textContent = "unavailable";
+    $("nyse-note").textContent = "The NYSE list loads from nyse.json next to this page; open the page from a web server (it is on GitHub Pages) to use it.";
+  });
+  function search() {
+    const q = $("nyse-q").value.trim().toLowerCase(), sec = $("nyse-sector").value, by = $("nyse-sort").value;
+    const words = q.split(/\s+/).filter(Boolean);
+    let hits = NYSE.filter((x) => (!sec || x.sector === sec) && words.every((w) => x.hay.includes(w)));
+    const exact = (x) => x.ticker.toLowerCase() === q ? 0 : x.ticker.toLowerCase().startsWith(q) ? 1 : 2;
+    hits.sort((a, b) => (q ? exact(a) - exact(b) : 0) || (by === "name" ? a.name.localeCompare(b.name) : by === "sector" ? a.sector.localeCompare(b.sector) || a.ticker.localeCompare(b.ticker) : a.ticker.localeCompare(b.ticker)));
+    shown = hits.slice(0, LIMIT); active = shown.length ? 0 : -1;
+    $("nyse-list").innerHTML = shown.map((x, i) => '<li role="option" id="ny-' + i + '" data-i="' + i + '" aria-selected="' + (i === active) + '"><b>' + esc(x.ticker) + "</b><span>" + esc(x.name) +
+      "</span><small>" + esc(x.sector) + (x.industry ? " · " + esc(x.industry) : "") + "</small></li>").join("");
+    $("nyse-q").setAttribute("aria-activedescendant", active >= 0 ? "ny-" + active : "");
+    $("nyse-note").textContent = hits.length > LIMIT ? "Showing " + LIMIT + " of " + hits.length.toLocaleString("en-CA") + " matches: type more or pick a sector to narrow it."
+      : hits.length ? hits.length.toLocaleString("en-CA") + " match" + (hits.length === 1 ? "" : "es") + ". Choose one to chart it." : NYSE.length ? "No NYSE ticker matches." : "";
+  }
+  function mark(i) {
+    active = i;
+    for (const li of $("nyse-list").children) li.setAttribute("aria-selected", String(+li.dataset.i === i));
+    const li = $("ny-" + i); if (li) li.scrollIntoView({ block: "nearest" });
+    $("nyse-q").setAttribute("aria-activedescendant", "ny-" + i);
+  }
+  function choose(x) {
+    preset({ tick: x.ticker, sector: x.sector, company: true, price: "", stop: "", months: Number($("pj-months").value), conv: "Medium", vol: Number($("pj-vol").value),
+      bull: ["", 25], base: ["", 50], bear: ["", 25] });
+    $("picked").hidden = false;
+    $("picked").innerHTML = "<b>" + esc(x.name) + "</b> · NYSE: " + esc(x.ticker) + "<br>" + esc(x.sector) + (x.industry ? " · " + esc(x.industry) : "") +
+      ' · <a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=' + x.cik + '" target="_blank" rel="noopener">SEC filings ↗</a>' +
+      '<br>The SEC lists no prices: enter today\'s price, then your cases.';
+    $("pj-price").focus();
+  }
+  $("nyse-q").addEventListener("input", search);
+  $("nyse-sector").addEventListener("change", search);
+  $("nyse-sort").addEventListener("change", search);
+  $("nyse-q").addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" && shown.length) { e.preventDefault(); mark(Math.min(shown.length - 1, active + 1)); }
+    else if (e.key === "ArrowUp" && shown.length) { e.preventDefault(); mark(Math.max(0, active - 1)); }
+    else if (e.key === "Enter" && active >= 0) { e.preventDefault(); choose(shown[active]); }
+  });
+  $("nyse-list").addEventListener("click", (e) => { const li = e.target.closest("li"); if (li) choose(shown[+li.dataset.i]); });
+
+  // A starting point, not a view: bull +40%, base +8%, bear -30% at 25/50/25, stop 15% below. Marked TEMPLATE until edited.
+  $("tpl-fill").addEventListener("click", () => {
+    const price = n($("pj-price").value);
+    if (!(price > 0)) { $("pj-price").focus(); return; }
+    const r2 = (x) => Math.round(x * 100) / 100;
+    $("pj-bull-v").value = r2(price * 1.4); $("pj-bull-p").value = 25; $("pj-base-v").value = r2(price * 1.08); $("pj-base-p").value = 50;
+    $("pj-bear-v").value = r2(price * 0.7); $("pj-bear-p").value = 25; if (!(n($("pj-stop").value) > 0)) $("pj-stop").value = r2(price * 0.85);
+    $("tpl").hidden = false; draw();
+  });
+  for (const id of ["pj-bull-v", "pj-bull-p", "pj-base-v", "pj-base-p", "pj-bear-v", "pj-bear-p"]) $(id).addEventListener("input", () => { $("tpl").hidden = true; });
+
   // ---------- 01.5 trade options: every idea projected and sized, sorted by one measure
   const toIdea = (p) => ({ symbol: p.tick, sector: p.sector ?? null, price: p.price, stop: p.stop, months: p.months, vol: p.vol, conviction: p.conv,
     bull: { value: p.bull[0], prob: p.bull[1] }, base: { value: p.base[0], prob: p.base[1] }, bear: { value: p.bear[0], prob: p.bear[1] } });

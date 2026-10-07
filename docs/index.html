@@ -35,7 +35,7 @@ a { color: var(--accent); }
   <p class="lede">An IPO and stock research assistant on Claude that answers in a one-page memo, then lets code check every number in it.</p>
   <p><a class="cta" href="app/">Open the terminal →</a><a class="cta ghost" href="https://github.com/luke-zhang-cs-py/ipo-bot">Source</a></p>
   <img src="demo.gif" width="960" height="600" alt="A price projection with bull, base and bear paths and 10-90% bands; sizing a purchase as the stop-working price moves; a memo's KEY NUMBERS block failing the rating check">
-  <p class="cap">The parts that run without an API key: a memo's scenarios drawn as a price projection, sizing a purchase by your own
+  <p class="cap">The parts that run without an API key: every NYSE ticker the SEC lists to choose from, a memo's scenarios drawn as a price projection, sizing a purchase by your own
     rules, and checking a memo's numbers. The sizing and checks are ported from the Python and tested against it case by case; the
     projection uses the same probability-weighted value and rating thresholds.</p>
 
@@ -76,7 +76,7 @@ a { color: var(--accent); }
   <h2>Run it</h2>
 <pre>pip install -r requirements.txt
 python src/ipo_bot.py "Rate the &lt;company&gt; IPO"      # needs ANTHROPIC_API_KEY
-python -m pytest -q tests                            # 106 offline tests, free</pre>
+python -m pytest -q tests                            # 110 offline tests, free</pre>
 
   <h2>Limits</h2>
   <ul>
