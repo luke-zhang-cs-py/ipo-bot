@@ -44,6 +44,7 @@ L2_GRID = (0.1, 1.0, 10.0, 100.0)   # what the re-optimised walk-forward chooses
 WINDOWS = (None, 3)             # all earlier years, or only the last three
 FRICTION = (0.0, 0.0025, 0.005, 0.01, 0.02, 0.03)   # slippage, spread and fees together, each way
 HOLDOUT_LOG = ROOT / "bench_runs" / "ipo_holdout_log.jsonl"
+LIVE_BYTES = 150_000            # what the live scorer reads of a filing: the cover page, where the offer and range are
 SLIPPAGE = (0.0, 0.005, 0.01, 0.02)
 COVERED = 0.6                   # a year counts as well covered when this share of its IPOs still has prices
 CURSE_K = (2, 5, 10)            # how steeply a retail allocation shrinks as a deal's demand grows
@@ -145,6 +146,9 @@ def bank_shares(train):
 def features(r, market, banks):
     """The model's inputs for one IPO, from its prospectus, the market before it, and the training league table."""
     offer, rng = r["offer_price"], r.get("range")
+    listed = (r.get("prices") or {}).get("listing_date")
+    if rng and listed and r.get("range_date") and r["range_date"] >= listed:
+        rng = None                                 # a filing from the listing day or later was not public before it
     mid = (rng[0] + rng[1]) / 2 if rng else None
     proceeds = offer * r["shares"] if r.get("shares") else None
     g = sic_group(r.get("sic"))
@@ -368,13 +372,16 @@ def leakage_audit(rows, build=None):
     - a canary: a feature that does use the first day is planted, and the perturbation test must catch it.
     build(rows) -> {adsh: features} defaults to the real feature builder."""
     build = build or (lambda rs: _all_features(rs))
+    # ranges filed on or after the listing day: counted, and kept out of the features (features() drops them)
     late = [r["adsh"] for r in rows if r.get("range_date") and r["range_date"] >= r["prices"]["listing_date"]]
+    late_used = [a for a in late if not _all_features([r for r in rows if r["adsh"] == a])[a]["no_range"]]
     slow = [r["adsh"] for r in rows
             if (dt.date.fromisoformat(r["prospectus_date"]) - dt.date.fromisoformat(r["prices"]["listing_date"])).days > 5]
     leaks = perturbation_leaks(rows, build)
     canary = perturbation_leaks(rows, lambda rs: {a: {**f, "canary": first_day(next(r for r in rs if r["adsh"] == a))}
                                                   for a, f in build(rs).items()})
-    return {"range_after_listing": late, "prospectus_late": slow, "leaks": leaks, "canary_caught": bool(canary)}
+    return {"range_after_listing": late, "range_after_listing_used": late_used, "prospectus_late": slow, "leaks": leaks,
+            "canary_caught": bool(canary)}
 
 
 def _all_features(rows, spy20=None):
@@ -500,8 +507,8 @@ def winners_curse(folds, top=0.2):
 def score_live(event, model, banks, market_now):
     """Score one IPO from a live event at the open: {prospectus: text, registration: text, sic, foreign,
     opening: {indication: price} or anything}. Whatever is missing or malformed gives "unknown", never a crash."""
-    def as_text(x):                               # a feed field that isn't text is treated as missing; only the
-        return x[:ipo_data.HEAD_BYTES] if isinstance(x, (str, bytes)) else ""   # first part is read, as ipo_data does
+    def as_text(x):                               # a feed field that isn't text is treated as missing; only the cover
+        return x[:LIVE_BYTES] if isinstance(x, (str, bytes)) else ""             # page is read (it holds the offer and range)
     try:
         if not isinstance(event, dict):
             return {"status": "unknown", "why": "not an event"}
@@ -615,7 +622,7 @@ def report(final=False, again=False):
     spy20 = spy_returns(spy_closes())
     market = market_features(rows if final else dev, spy20)
     lines = [f"# IPO evaluation, {dt.date.today().isoformat()}", "",
-             f"{len(raw)} IPOs with a final prospectus since {ipo_data.FIRST_YEAR}; {len(rows)} with trustworthy first-day "
+             f"{len(raw)} IPOs with a final prospectus since {ipo_data.FIRST_YEAR}; {len(rows)} with an offer price and trustworthy first-day "
              f"prices; a pop is a first-day close {100 * POP:.0f}% or more above the offer.", ""]
 
     # coverage and survivorship
@@ -724,7 +731,8 @@ def report(final=False, again=False):
     # 2. leakage
     audit = leakage_audit(dev, lambda rs: _all_features(rs, spy20))
     lines += ["## 2. Leakage audit", "",
-              f"- Ranges from a filing on or after the listing day: {len(audit['range_after_listing'])}.",
+              f"- Ranges from a filing on or after the listing day: {len(audit['range_after_listing'])}, of which the features use "
+              f"{len(audit['range_after_listing_used'])} (they are treated as having no range).",
               f"- Final prospectuses filed more than five days after listing: {len(audit['prospectus_late'])}.",
               f"- Perturbation: rewriting an IPO's trading changed {len(audit['leaks'])} earlier or same-day IPOs' features.",
               f"- The planted canary (a feature that reads the first day) was {'caught' if audit['canary_caught'] else 'MISSED'}.",

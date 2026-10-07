@@ -49,10 +49,13 @@ on 30 US large caps, 15 country ETFs and the 9 US sector ETFs, each seeing only 
 | 12-month 80% ranges | held the outcome only 70% to 77% of the time |
 | Chosen on 2018-2023, tested once from 2024 (recorded, not re-run) | 0 of 1 held up |
 | Five beginner bots (DCA, 60/40 rebalancing, trend, mean reversion, grid), 2005-2026, 0.30% a round trip | none beat holding SPY; trend is fragile (ahead only in 2005-2015) |
+| A pre-listing IPO model, walk-forward 2018-2023 on 1,201 priced IPOs | PR-AUC 0.66 against a 0.40 base rate (p = 0.001); weak in the 2022-23 bear market; nothing left once trading opens |
+| Paper bot replayed over 2026 on real prices, every guardrail on | +10.7% against SPY's +13.8%, beta 0.34; 38% of signals stopped by the price-deviation guard ([`tracking/`](tracking/)) |
 
 Simple price signals give no 12-month edge that holds up, and ranges drawn from history are too narrow; both findings
 went back into the prompt. Every backtest fills at the next open, charges costs, and is re-run at 1.5x and 2x costs,
-with late fills, nudged parameters and by market regime. Details: [`evaluation/`](evaluation/).
+with late fills, nudged parameters and by market regime; look-ahead and warm-up checks, volume-share slippage and
+split-adjusted prices follow freqtrade, zipline and LEAN (re-implemented, see the spec). Details: [`evaluation/`](evaluation/).
 
 ## Run it
 
@@ -64,12 +67,13 @@ python src/ipo_bot.py --audit "Rate <ticker>"            # plus a second-pass au
 python src/paper.py run signals.json --portfolio portfolio.json [--alpaca]   # paper trading; then: report
 python evaluation/strategies.py                          # the five bots and their stress tests
 python evaluation/ipo_data.py && python evaluation/ipo_eval.py   # the IPO dataset (about an hour) and its checks
+python evaluation/tracker.py                             # the paper bot against the market this year: tracking/
 ```
 
 ## Tests
 
 ```bash
-python -m pytest -q tests                  # 162 offline tests, free (10 need Node: the browser demo against the Python)
+python -m pytest -q tests                  # 172 offline tests, free (10 need Node: the browser demo against the Python)
 IPO_BOT_LIVE=1 python -m pytest -q tests/test_live_market.py   # 15 live checks on real SEC filings and prices
 python testkit/kit.py regress --yes        # the test kit, live: calculation cases, hallucination traps, a tools-off
                                            # stale-data test, rule tests; costs API credit
@@ -87,6 +91,7 @@ evaluation/   benchmark, calibration, robustness, backtest suite, trading bots, 
 testkit/      the test kit (kit.py) and its cases
 tests/        the pytest suite
 docs/         the write-up, the browser demo (GitHub Pages) and the trading spec
+tracking/     the running check of the paper bot against the market
 scripts/      rebuilds the NYSE list from SEC data, re-records the demo GIF
 ```
 
@@ -95,6 +100,7 @@ scripts/      rebuilds the NYSE list from SEC data, re-records the demo GIF
 - No live run is recorded: every live test needs an API key and costs credit.
 - The stock universes are today's survivors, which flatters long-only results; the sector ETFs are the survivor-free check.
   The IPO dataset has the same problem: Yahoo keeps no prices for delisted companies, so coverage is reported by year.
-- Paper trading needs a free Alpaca paper account; no forward test has been run yet.
+- Paper trading is replayed on real daily prices with a simulated order book; a live forward test needs a free Alpaca
+  paper account. The IPO holdout (2024 on) is still sealed.
 - Views on securities, not personal advice; every answer ends with that disclaimer. Before anyone else uses it, ask a
   securities lawyer about adviser registration (including Massachusetts) and your data licences.

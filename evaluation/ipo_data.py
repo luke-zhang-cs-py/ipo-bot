@@ -3,6 +3,7 @@ it listed, and how it traded after.
 
     python evaluation/ipo_data.py                 build or extend bench_data/ipo/ipos.jsonl (resumes; about an hour)
     python evaluation/ipo_data.py --summary       counts by year, and how many have prices
+    python evaluation/ipo_data.py --refresh       re-read every IPO's cover and prices (after a parser fix)
 
 Before the listing (features): the offer price, shares and lead bookrunner from the final prospectus (424B4),
 the price range from the last amended registration (S-1/A or F-1/A) filed before it, the SIC code, and
@@ -69,15 +70,20 @@ def _num(s):
     return float(s.replace(",", ""))
 
 
-def offer_price(text):
-    """The final offer price per share or ADS, or None."""
+def offer_price(text, rng=None):
+    """The final offer price per share or ADS, or None. Candidates come strongest pattern first; with the
+    marketed range known, the first within half its low to twice its high wins, so a per-share fee or
+    discount on the cover ("$1.50 per share") is not taken for the price."""
+    candidates = []
     for pat in (r"initial public offering price (?:is|of|per (?:share|ADS)[^$]{0,40}?)\s*\$\s?([\d,]+(?:\.\d+)?)",
                 r"public offering price[^$]{0,60}\$\s?([\d,]+\.\d\d) per (?:share|ADS|American)",
                 r"\$\s?([\d,]+\.\d\d) per (?:share|ADS)"):
-        m = re.search(pat, text, re.I)
-        if m and 0.5 <= _num(m.group(1)) <= 500:
-            return _num(m.group(1))
-    return None
+        candidates += [_num(m.group(1)) for m in re.finditer(pat, text[:120000], re.I)]
+    candidates = [c for c in candidates if 0.5 <= c <= 500]
+    if rng:
+        fits = [c for c in candidates if rng[0] * 0.5 <= c <= rng[1] * 2]
+        return fits[0] if fits else None
+    return candidates[0] if candidates else None
 
 
 def price_range(text):
@@ -236,8 +242,10 @@ def filings_of(sec, cik, before=None):
 
 def yahoo_chart(symbol, around):
     t0 = int(dt.datetime.fromisoformat(around).replace(tzinfo=dt.timezone.utc).timestamp()) - 10 * 86400
+    # to today, not just the first year: Yahoo adjusts old prices for every later split, so every split since
+    # the listing has to be on record to undo it (Shopify's 2022 10-for-1, years of biotech reverse splits)
     url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol.replace('.', '-')}"
-           f"?period1={t0}&period2={t0 + 420 * 86400}&interval=1d&events=split")
+           f"?period1={t0}&period2={int(time.time())}&interval=1d&events=split")
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     for attempt in range(3):
         try:
@@ -267,9 +275,8 @@ def build_row(sec, hit):
         return None
     base = f"https://www.sec.gov/Archives/edgar/data/{int(hit['cik'])}"
     text = text_of(sec.head(f"{base}/{hit['adsh'].replace('-', '')}/{hit['file']}"))
-    offer = offer_price(text)
     row = {"cik": hit["cik"], "company": hit["name"], "ticker": hit["ticker"], "sic": sic or hit["sic"],
-           "prospectus_date": hit["file_date"], "offer_price": offer, "shares": shares_offered(text), "lead_bank": lead_bank(text),
+           "prospectus_date": hit["file_date"], "file": hit["file"], "shares": shares_offered(text), "lead_bank": lead_bank(text),
            "foreign": any(f.startswith("F-1") for f, d, _, _ in filings if d <= hit["file_date"]),
            "range": None, "range_date": None, "sources": {"prospectus": hit["file_date"]}}
     amended = [r for r in filings if r[0] in ("S-1/A", "F-1/A", "S-1", "F-1") and r[1] <= hit["file_date"]]
@@ -279,6 +286,8 @@ def build_row(sec, hit):
             row["range"], row["range_date"] = list(rng), date
             row["sources"]["range"] = date
             break
+    offer = offer_price(text, row["range"])
+    row["offer_price"] = offer
     row["listing_symbol"] = listing_symbol(text)
     row["prices"] = None
     for symbol in dict.fromkeys(t for t in (row["listing_symbol"], hit["ticker"]) if t):
@@ -324,14 +333,59 @@ def build(years=None):
                         print(f"  {n}/{len(hits)}", flush=True)
 
 
-def load(path=OUT):
+def refresh():
+    """Re-read every IPO row's prospectus cover (offer, shares, bank, symbol) and its prices, keeping the range
+    already found: for after a fix to those parsers, without walking every filing again."""
+    sec = Sec()
+    rows = load(dedupe=False)
+    files = {}
+    for year in sorted({r["prospectus_date"][:4] for r in rows}):
+        files.update({h["adsh"]: h for h in prospectus_hits(sec, int(year))})
+    print(f"refreshing {len(rows)} IPO rows", flush=True)
+
+    def one(r):
+        hit = files.get(r["adsh"])
+        if not hit:
+            return None
+        try:
+            base = f"https://www.sec.gov/Archives/edgar/data/{int(r['cik'])}"
+            text = text_of(sec.head(f"{base}/{hit['adsh'].replace('-', '')}/{hit['file']}"))
+            offer = offer_price(text, r.get("range"))
+            new = {**r, "file": hit["file"], "offer_price": offer, "shares": shares_offered(text), "lead_bank": lead_bank(text),
+                   "listing_symbol": listing_symbol(text), "prices": None}
+            new.pop("price_symbol", None)
+            for symbol in dict.fromkeys(t for t in (new["listing_symbol"], hit["ticker"]) if t):
+                chart = yahoo_chart(symbol, r["prospectus_date"])
+                prices = first_days(chart, r["prospectus_date"], offer) if chart else None
+                if prices:
+                    new["prices"], new["price_symbol"] = prices, symbol
+                    break
+            return new
+        except Exception as e:
+            return {**r, "refresh_error": str(e)}
+    with OUT.open("a", encoding="utf-8") as f, concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        for n, new in enumerate(pool.map(one, rows), 1):
+            if new:
+                f.write(json.dumps(new) + "\n")
+                f.flush()
+            if n % 100 == 0:
+                print(f"  {n}/{len(rows)}", flush=True)
+
+
+def load(path=OUT, dedupe=True):
     """The IPO rows (skipped filings left out), oldest prospectus first."""
     latest = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip():
             r = json.loads(line)
             latest[r["adsh"]] = r              # a filing redone later replaces its earlier row
-    return sorted([r for r in latest.values() if "skip" not in r], key=lambda r: r["prospectus_date"])
+    rows = sorted([r for r in latest.values() if "skip" not in r], key=lambda r: r["prospectus_date"])
+    if not dedupe:
+        return rows
+    first = {}                                 # a company's IPO is its first final prospectus; a second one the same
+    for r in rows:                             # day (another share class, a corrected filing) is not another IPO
+        first.setdefault(r["cik"], r)
+    return sorted(first.values(), key=lambda r: r["prospectus_date"])
 
 
 def summary():
@@ -349,4 +403,4 @@ def summary():
 
 
 if __name__ == "__main__":
-    summary() if "--summary" in sys.argv else build()
+    summary() if "--summary" in sys.argv else refresh() if "--refresh" in sys.argv else build()

@@ -1,0 +1,35 @@
+name: tracker
+
+# The paper bot against the market, re-measured after every US trading day: evaluation/tracker.py replays the
+# year to date on the latest prices and commits tracking/ (the report, and one line per run in track.json).
+on:
+  schedule:
+    - cron: "30 22 * * 1-5"      # 22:30 UTC on weekdays, after the US close
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tracker
+  cancel-in-progress: false
+
+jobs:
+  track:
+    # Pinned, not ubuntu-latest: a runner image changing under the job is a failure with no code change behind it.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python evaluation/tracker.py
+      - name: Commit the new tracking report
+        run: |
+          git config user.name "tracker"
+          git config user.email "tracker@users.noreply.github.com"
+          git add tracking/
+          git diff --cached --quiet || git commit -m "Tracking: $(date -u +%F)"
+          git push

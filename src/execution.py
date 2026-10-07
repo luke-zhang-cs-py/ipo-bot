@@ -70,6 +70,43 @@ class SimBroker:
                 "fee": round(cost * self.fee_rate, 4), "status": status}
 
 
+class BarBroker:
+    """Fills from a day's bar instead of a quote, for replays on daily data. A buy limit fills at the open when the
+    open is at or under the limit; otherwise only if the day's low trades through it (strictly below, as a
+    resting order behind others in the queue needs: after NautilusTrader's and backtrader's bar fill rules,
+    re-implemented). Each fill is capped at volume_limit of the day's volume, with zipline's quadratic impact
+    price_impact x (share of volume)^2. bars: {symbol: (open, high, low, close, volume)} for the day."""
+
+    def __init__(self, bars, volume_limit=0.025, price_impact=0.1, fee_rate=0.0):
+        self.bars = {k.upper(): v for k, v in bars.items()}
+        self.volume_limit, self.price_impact, self.fee_rate = volume_limit, price_impact, fee_rate
+        self.used = {}                                     # shares already filled today, per symbol
+        self.orders = []
+
+    def submit(self, symbol, shares, limit):
+        sym = symbol.upper()
+        self.orders.append((sym, shares, limit))
+        order_id = f"bar-{len(self.orders)}"
+        if sym not in self.bars:
+            raise BrokerError(f"no bar for {symbol}")
+        o, h, lo, c, vol = self.bars[sym]
+        if o <= limit:
+            price = o
+        elif lo < limit:
+            price = limit
+        else:
+            return {"order_id": order_id, "filled": 0, "avg_price": None, "fee": 0.0,
+                    "status": "unfilled: the price never traded through the limit"}
+        room = max(0, int(self.volume_limit * vol) - self.used.get(sym, 0))
+        filled = min(int(shares), room)
+        if filled <= 0:
+            return {"order_id": order_id, "filled": 0, "avg_price": None, "fee": 0.0, "status": "unfilled: the day's volume share is used up"}
+        self.used[sym] = self.used.get(sym, 0) + filled
+        price = min(limit, price * (1 + self.price_impact * (filled / vol) ** 2)) if vol else price
+        return {"order_id": order_id, "filled": filled, "avg_price": price, "fee": round(filled * price * self.fee_rate, 4),
+                "status": "filled" if filled == int(shares) else "partial"}
+
+
 def execute_buy(view, signal, broker, attempts=MAX_ATTEMPTS, limit_slippage=LIMIT_SLIPPAGE):
     """Size a buy under the rules and work it at the broker. signal: {symbol, entry, stop, conviction, sector?,
     next_earnings?, avg_volume?, now?}. Returns what happened, order by order:

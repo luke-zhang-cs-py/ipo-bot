@@ -54,33 +54,46 @@ def friction(position, fee=FEE, slippage=SLIPPAGE, round_trips=1):
 
 # ----------------------------------------------------------------------------- data
 
-def daily(symbol):
-    """[(date, open, close)] adjusted for splits and dividends, from START; cached for the day."""
-    path = ROOT / "bench_data" / f"daily_{symbol}.json"
+def daily(symbol, full=False):
+    """[(date, open, close)] adjusted for splits and dividends, from START; cached for the day. With full=True,
+    [(date, open, close, split-adjusted open, split-adjusted close, volume, dividend paid that day)]."""
+    path = ROOT / "bench_data" / f"daily2_{symbol}.json"
     if path.exists():
         cached = json.loads(path.read_text(encoding="utf-8"))
         if cached.get("fetched") == dt.date.today().isoformat():
-            return [tuple(b) for b in cached["bars"]]
+            return [tuple(b) if full else tuple(b[:3]) for b in cached["bars"]]
     t0 = int(dt.datetime.fromisoformat(START).replace(tzinfo=dt.timezone.utc).timestamp())
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?period1={t0}&period2={int(time.time())}&interval=1d&events=div%2Csplit"
     with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=60) as r:
         res = json.loads(r.read())["chart"]["result"][0]
     q, adj = res["indicators"]["quote"][0], res["indicators"]["adjclose"][0]["adjclose"]
+    divs = {dt.datetime.fromtimestamp(v["date"], dt.timezone.utc).date().isoformat(): v["amount"]
+            for v in ((res.get("events") or {}).get("dividends") or {}).values()}
     bars = []
-    for t, o, c, a in zip(res["timestamp"], q["open"], q["close"], adj):
+    for t, o, c, a, v in zip(res["timestamp"], q["open"], q["close"], adj, q["volume"]):
         if o and c and a:
             k = a / c                                   # the adjustment, applied to the open as well
-            bars.append((dt.datetime.fromtimestamp(t, dt.timezone.utc).date().isoformat(), o * k, a))
+            d = dt.datetime.fromtimestamp(t, dt.timezone.utc).date().isoformat()
+            bars.append((d, o * k, a, o, c, v or 0, divs.get(d, 0.0)))
     path.parent.mkdir(exist_ok=True)
     path.write_text(json.dumps({"fetched": dt.date.today().isoformat(), "bars": bars}), encoding="utf-8")
-    return bars
+    return bars if full else [b[:3] for b in bars]
 
 
-def aligned(*symbols):
-    """Dates every symbol traded, and {symbol: [(open, close)]} on those dates."""
-    series = {s: {d: (o, c) for d, o, c in daily(s)} for s in symbols}
-    dates = sorted(set.intersection(*(set(v) for v in series.values())))
-    return dates, {s: [series[s][d] for d in dates] for s in symbols}
+def aligned(*symbols, mode="adjusted"):
+    """Dates every symbol traded, {symbol: [(open, close)]} on those dates, and {symbol: {"volume": [...],
+    "div": [...]}}. mode "adjusted": prices adjusted for splits and dividends (dividends reinvested, in effect);
+    "split_adjusted": prices adjusted for splits only, with each dividend paid as cash on its day (LEAN's
+    SplitAdjusted mode, which it describes as close to what a live account sees)."""
+    full = {s: {b[0]: b for b in daily(s, full=True)} for s in symbols}
+    dates = sorted(set.intersection(*(set(v) for v in full.values())))
+    if mode == "adjusted":
+        bars = {s: [(full[s][d][1], full[s][d][2]) for d in dates] for s in symbols}
+    else:
+        bars = {s: [(full[s][d][3], full[s][d][4]) for d in dates] for s in symbols}
+    extras = {s: {"volume": [full[s][d][5] for d in dates],
+                  "div": [full[s][d][6] if mode != "adjusted" else 0.0 for d in dates]} for s in symbols}
+    return dates, bars, extras
 
 
 # ----------------------------------------------------------------------------- the bots: weights from closes only
@@ -156,9 +169,19 @@ BOTS = {"dca": dca, "rebalancing": rebalancing, "trend": trend, "mean_reversion"
 
 # ----------------------------------------------------------------------------- the engine
 
-def simulate(bot, dates, bars, cost_x=1.0, delay=0, start_cash=10_000.0, fee=FEE, slippage=SLIPPAGE):
+VOLUME_LIMIT = 0.025          # zipline's VolumeShareSlippage default: at most 2.5% of a day's volume fills
+PRICE_IMPACT = 0.1            # and its impact: price x (1 + 0.1 x (share of volume)^2)
+PER_SHARE = (0.005, 1.0)      # a per-share commission and its minimum per order, a common US broker schedule
+
+
+def simulate(bot, dates, bars, cost_x=1.0, delay=0, start_cash=10_000.0, fee=FEE, slippage=SLIPPAGE, extras=None,
+             volume_share=False, per_share=False):
     """Run a bot: after each close it names target weights; they are traded at the open `1 + delay` days later,
-    paying fee and slippage (times cost_x) on every fill. Returns the equity curve, flows and closed trades."""
+    paying fee and slippage (times cost_x) on every fill. Returns the equity curve, flows and closed trades.
+    extras: {asset: {"volume": [...], "div": [...]}} from aligned(); a dividend is paid as cash on its day.
+    volume_share: fills capped at VOLUME_LIMIT of the day's volume with quadratic impact (zipline's
+    VolumeShareSlippage, re-implemented from its documented formula); the rest is lost for that day.
+    per_share: PER_SHARE commission instead of the percentage fee."""
     assets = bot["assets"]
     closes = {a: [c for _, c in bars[a]] for a in assets}
     opens = {a: [o for o, _ in bars[a]] for a in assets}
@@ -172,6 +195,7 @@ def simulate(bot, dates, bars, cost_x=1.0, delay=0, start_cash=10_000.0, fee=FEE
     held_weights = None
     week = None
     invested_days = 0
+    dividends_paid, capped_fills, commissions = [], [], []
     for i, d in enumerate(dates):
         # 1. fills at today's open, from a decision made 1 + delay closes ago
         flow = 0.0
@@ -182,6 +206,13 @@ def simulate(bot, dates, bars, cost_x=1.0, delay=0, start_cash=10_000.0, fee=FEE
                 cash += contribution
                 flow = contribution
                 pending.setdefault(i, held_weights or {"SPY": 1.0})
+        if extras:
+            for a in assets:
+                div = extras[a]["div"][i]
+                if div and shares[a] > 0:
+                    cash += shares[a] * div                  # paid as cash, as in a live account
+                    flow_div = shares[a] * div
+                    dividends_paid.append(flow_div)
         if i in pending:
             target = pending.pop(i)
             equity_open = cash + sum(shares[a] * opens[a][i] for a in assets)
@@ -189,35 +220,50 @@ def simulate(bot, dates, bars, cost_x=1.0, delay=0, start_cash=10_000.0, fee=FEE
             for a in assets:
                 want = target.get(a, 0.0) * equity_open / opens[a][i]
                 diff = want - shares[a]
-                if abs(diff * opens[a][i]) < MIN_TRADE * equity_open and not contribution and target.get(a, 0.0) not in (0.0, 1.0):
+                # a top-up or trim under MIN_TRADE of the account is dust: skipped, whatever the target (a full
+                # exit to zero, and DCA's weekly buy, always go through)
+                if abs(diff * opens[a][i]) < MIN_TRADE * equity_open and not contribution and target.get(a, 0.0) != 0.0:
                     continue
                 if abs(diff) * opens[a][i] < 1.0:
                     continue
                 orders.append((a, diff))
             for a, diff in sorted(orders, key=lambda x: x[1]):          # sells first, to fund buys
                 px = opens[a][i]
+                vol = extras[a]["volume"][i] if extras else 0
+                if volume_share and vol:
+                    cap = VOLUME_LIMIT * vol
+                    if abs(diff) > cap:
+                        diff = cap if diff > 0 else -cap
+                        capped_fills.append(a)
+                    impact = PRICE_IMPACT * (abs(diff) / vol) ** 2
+                    px = px * (1 + impact) if diff > 0 else px * (1 - impact)
+                commission = max(PER_SHARE[1], PER_SHARE[0] * abs(diff)) * cost_x if per_share else 0.0
+                side_here = slippage * cost_x if per_share else side
                 if diff < 0:
                     qty = -diff
-                    got = qty * px * (1 - side)
+                    got = qty * px * (1 - side_here) - commission
+                    commissions.append(commission)
                     cash += got
                     shares[a] -= qty
                     left = qty
                     while left > 1e-12 and lots[a]:
                         lot = lots[a][0]
                         take = min(left, lot[0])
-                        trades.append({"asset": a, "pnl": take * (px * (1 - side) - lot[1]), "cost": take * lot[1], "closed": d})
+                        trades.append({"asset": a, "pnl": take * (px * (1 - side_here) - lot[1]) - commission * take / qty,
+                                       "cost": take * lot[1], "closed": d})
                         lot[0] -= take
                         left -= take
                         if lot[0] <= 1e-12:
                             lots[a].pop(0)
                 else:
-                    spend = min(cash, diff * px * (1 + side))
-                    qty = spend / (px * (1 + side))
+                    spend = min(cash - commission, diff * px * (1 + side_here))
+                    qty = spend / (px * (1 + side_here))
                     if qty <= 0:
                         continue
-                    cash -= spend
+                    cash -= spend + commission
+                    commissions.append(commission)
                     shares[a] += qty
-                    lots[a].append([qty, px * (1 + side)])
+                    lots[a].append([qty, px * (1 + side_here) + commission / qty])
         # 2. today's close: value, weights, and the next decision
         equity = cash + sum(shares[a] * closes[a][i] for a in assets)
         curve.append(equity)
@@ -228,7 +274,8 @@ def simulate(bot, dates, bars, cost_x=1.0, delay=0, start_cash=10_000.0, fee=FEE
         target = decide(i, closes, held_weights, {i: d}) if bot.get("needs_dates") else decide(i, closes, held_weights)
         if target != held_weights and i + 1 + delay < len(dates):
             pending[i + 1 + delay] = target
-    return {"curve": curve, "flows": flows, "trades": trades, "dates": dates, "exposure": invested_days / max(1, len(dates))}
+    return {"curve": curve, "flows": flows, "trades": trades, "dates": dates, "exposure": invested_days / max(1, len(dates)),
+            "dividends": sum(dividends_paid), "capped_fills": len(capped_fills), "commissions": sum(commissions)}
 
 
 def metrics(run, dates=None):
@@ -313,7 +360,7 @@ def trade_cells(m):
 
 def report():
     from ipo_eval import spy_regime
-    dates, bars = aligned("SPY", "IEF")
+    dates, bars, extras = aligned("SPY", "IEF")
     out = [f"# Trading bot backtests, {dt.date.today():%d %b %Y}", "",
            f"Daily bars {dates[0]} to {dates[-1]}; fills at the next open; {100 * FEE:.2f}% fee and {100 * SLIPPAGE:.2f}% slippage a side, "
            f"so a round trip costs {100 * friction(1)[2]:.2f}%. Rules fixed in advance (see the module), not tuned.", ""]
@@ -369,7 +416,31 @@ def report():
         out.append(f"| {make()['name']} | " + " | ".join(row) + " |")
     out += ["", "Annualised difference in daily return from holding SPY, on the days the market was in each state "
             "(labelled from SPY's past year only).", ""]
+    out += framework_checks()
     return "\n".join(out)
+
+
+def framework_checks():
+    """The same bots under modelling choices taken from other backtesters: LEAN's split-adjusted prices with
+    dividends in cash, zipline's volume-share slippage, a per-share commission. A result that moves a lot
+    under these was leaning on a modelling shortcut."""
+    out = ["## Modelling cross-checks (from other frameworks)", "",
+           "| Bot | as above | LEAN split-adjusted, dividends in cash | + zipline volume-share slippage | + per-share commission $0.005 (min $1) |",
+           "|---|---|---|---|---|"]
+    d1, b1, e1 = aligned("SPY", "IEF")
+    d2, b2, e2 = aligned("SPY", "IEF", mode="split_adjusted")
+    for key, make in BOTS.items():
+        base = metrics(simulate(make(), d1, b1))
+        split = simulate(make(), d2, b2, extras=e2)
+        vol = simulate(make(), d2, b2, extras=e2, volume_share=True)
+        per = simulate(make(), d2, b2, extras=e2, volume_share=True, per_share=True)
+        out.append(f"| {make()['name']} | {pct(base['cagr'])} | {pct(metrics(split)['cagr'])} (dividends ${split['dividends']:,.0f}) | "
+                   f"{pct(metrics(vol)['cagr'])} ({vol['capped_fills']} capped) | {pct(metrics(per)['cagr'])} (commissions ${per['commissions']:,.0f}) |")
+    out += ["", "CAGR on the same days. The split-adjusted run should land close to the adjusted one for a bot that is always "
+            "invested (dividends end up in cash instead of compounding in the price); a big gap would mean the price series "
+            "was doing work it shouldn't. At $10,000 an order, volume caps never bind in SPY or IEF: the column checks the "
+            "machinery, and would matter in thinner stocks.", ""]
+    return out
 
 
 def main():

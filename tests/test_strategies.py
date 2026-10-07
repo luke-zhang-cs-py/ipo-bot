@@ -110,3 +110,33 @@ def test_fragility_needs_a_real_flip_not_noise_around_zero():
     assert S.flips(0.02, [("2x", 0.01), ("late", -0.03)]) == ["late"]
     assert S.flips(0.0, [("2x", -0.0001), ("late", 0.0002)]) == []          # level with SPY: nothing to flip
     assert S.flips(-0.02, [("half", 0.0005)]) == []                        # into the level zone is not across it
+
+
+def test_dividends_are_paid_in_cash_and_volume_and_commission_models_apply():
+    dates, bars = market([100.0] * 30)
+    extras = {"SPY": {"volume": [1_000_000] * 30, "div": [0.0] * 20 + [1.0] + [0.0] * 9},
+              "IEF": {"volume": [1_000_000] * 30, "div": [0.0] * 30}}
+    hold = {"name": "hold", "assets": ["SPY"], "decide": lambda i, closes, held: {"SPY": 1.0}}
+    run = S.simulate(hold, dates, bars, cost_x=0, extras=extras)
+    assert abs(run["dividends"] - 100.0) < 1.0                                   # 100 shares x $1, in cash
+    assert abs(run["curve"][-1] - 10_100.0) < 1.0
+    thin = {"SPY": {"volume": [1000] * 30, "div": [0.0] * 30}, "IEF": extras["IEF"]}
+    capped = S.simulate(hold, dates, bars, cost_x=0, extras=thin, volume_share=True)
+    assert capped["capped_fills"] > 0                                            # 2.5% of 1,000 shares a day
+    per = S.simulate(hold, dates, bars, cost_x=1, extras=extras, per_share=True)
+    assert abs(per["commissions"] - 1.0) < 1e-9                                  # 100 shares x $0.005 -> the $1 minimum
+
+
+def test_the_bias_checks_pass_honest_rules_and_catch_a_cheat():
+    import bias_checks as B
+    prices = [100 + 5 * math.sin(k / 7) + 0.03 * k for k in range(400)]
+    dates, bars = market(prices)
+    closes = {a: [c for _, c in bars[a]] for a in bars}
+    days, bad = B.lookahead(S.trend, closes, dates, samples=10)
+    assert days and bad == []
+    cheat = lambda: {"name": "cheat", "assets": ["SPY"], "params": {},
+                     "decide": lambda i, c, held: {"SPY": 1.0 if i + 1 < len(c["SPY"]) and c["SPY"][i + 1] > c["SPY"][i] else 0.0}}
+    _, caught = B.lookahead(cheat, closes, dates, samples=10)
+    assert caught, "a rule that reads tomorrow's close must be flagged"
+    warm = B.recursive(S.trend, closes, dates, warmups=(None, 300))
+    assert len(set(map(str, warm.values()))) == 1

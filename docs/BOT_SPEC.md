@@ -101,3 +101,21 @@ planned shares, slippage from the signal's price, fees and latency.
 | Stale data or abnormal spreads, repeatedly | The feed or the market is broken: halt with the kill file until it is understood. |
 | Fill rate or slippage worse than the backtest assumed | The backtest's costs were too kind: re-run it at the measured costs before trading on. |
 | Anything unexplained | `touch forecasts/paper/KILL` first, investigate second. |
+
+## What was taken from other open-source trading frameworks
+
+Each idea below is re-implemented here from the project's documented behaviour; no code is copied (freqtrade and
+backtrader are GPL-3.0, which would bind this MIT project if their code were copied).
+
+| Idea | From | Here |
+|---|---|---|
+| Look-ahead analysis: a rule's decisions on the full history against the history cut at each decision | freqtrade `lookahead-analysis` | `evaluation/bias_checks.py`, every bot and the replay signal |
+| Recursive (warm-up) analysis: the same decision with less history loaded | freqtrade `recursive-analysis` | `evaluation/bias_checks.py` |
+| Protections: a cooldown after selling, a pause after repeated stop-outs | freqtrade `CooldownPeriod`, `StoplossGuard` | `src/monitor.py` |
+| Volume-share slippage: at most 2.5% of a bar's volume fills, impact 0.1 x (share of volume)^2 | zipline `VolumeShareSlippage` (its defaults) | `evaluation/strategies.py`, `execution.BarBroker` |
+| A per-share commission with a minimum | zipline `PerShare`; common US broker schedules | `evaluation/strategies.py` |
+| Split-adjusted prices with dividends paid as cash | QuantConnect LEAN `SplitAdjusted` / `Raw` normalisation | `evaluation/strategies.py` (`mode="split_adjusted"`) |
+| A resting limit fills only when the price trades through it, not on a touch | NautilusTrader fill models; backtrader bar fills | `execution.BarBroker` |
+
+Not taken: leverage, shorting, market making, cross-venue arbitrage, and machine-learned exits; none fits a
+long-only research bot, and each adds failure modes the tests above don't cover.

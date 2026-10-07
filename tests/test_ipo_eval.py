@@ -227,3 +227,12 @@ def test_break_even_friction_is_where_the_open_stops_paying():
     be = E.break_even_friction(folds)
     assert be > 0
     assert E.at_open(folds, be * 0.9)[("every IPO", "day 1")]["mean"] > 0 > E.at_open(folds, be * 1.1)[("every IPO", "day 1")]["mean"]
+
+
+def test_a_range_filed_on_the_listing_day_is_not_used():
+    r = dict(ROWS[100])
+    r["range_date"] = r["prices"]["listing_date"]
+    f = E.features(r, MARKET, {})
+    assert f["no_range"] == 1.0 and f["revision"] == 0.0 and f["above_range"] == 0.0
+    audit = E.leakage_audit([r] + [x for x in ROWS[:60]])
+    assert audit["range_after_listing"] == [r["adsh"]] and audit["range_after_listing_used"] == []

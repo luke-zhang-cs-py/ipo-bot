@@ -174,3 +174,31 @@ def test_api_failures_through_paper_trading_pause_later_signals(tmp_path):
     statuses = [ln["result"]["status"] for ln in lines]
     assert statuses[:3] == ["api error"] * 3 and statuses[3:] == ["stopped by the monitor"] * 2
     assert len(broker.orders) == 3
+
+
+# ----------------------------------------------------------------------------- bar fills and protections
+
+def test_bar_fills_need_the_price_to_trade_through_the_limit_and_respect_volume():
+    b = execution.BarBroker({"DDD": (50.0, 51.0, 49.0, 50.5, 1_000_000)}, price_impact=0.0)
+    assert b.submit("DDD", 100, 50.2)["avg_price"] == 50.0                       # opened under the limit: the open
+    gap = execution.BarBroker({"DDD": (51.0, 51.5, 50.1, 51.2, 1_000_000)}, price_impact=0.0)
+    assert gap.submit("DDD", 100, 50.2)["avg_price"] == 50.2                     # traded down through it: the limit
+    touch = execution.BarBroker({"DDD": (51.0, 51.5, 50.2, 51.2, 1_000_000)})
+    assert touch.submit("DDD", 100, 50.2)["filled"] == 0                         # only touched it: no fill
+    thin = execution.BarBroker({"DDD": (50.0, 50.5, 49.5, 50.2, 2_000)})
+    first, second = thin.submit("DDD", 100, 50.2), thin.submit("DDD", 100, 50.2)
+    assert first["filled"] == 50 and first["status"] == "partial" and second["filled"] == 0     # 2.5% of 2,000, once
+    impact = execution.BarBroker({"DDD": (50.0, 50.5, 49.0, 50.2, 1000)}, volume_limit=1.0)
+    assert 50.0 < impact.submit("DDD", 500, 60.0)["avg_price"] <= 50.0 * (1 + 0.1 * 0.25) + 1e-9
+
+
+def test_cooldown_and_stoploss_guard(tmp_path):
+    m = monitor.Monitor(kill_file=tmp_path / "KILL")
+    m.record_exit("2026-10-05", "DDD", stopped=False)
+    assert m.gate(SIGNAL, now="2026-10-07T14:00:00Z").startswith("cooldown")
+    assert m.gate(SIGNAL, now="2026-10-09T14:00:00Z") is None                    # four days on: allowed
+    assert m.gate(dict(SIGNAL, symbol="EEE"), now="2026-10-07T14:00:00Z") is None
+    for d, s in (("2026-10-01", "A"), ("2026-10-04", "B"), ("2026-10-08", "C")):
+        m.record_exit(d, s, stopped=True)
+    assert m.gate(dict(SIGNAL, symbol="ZZZ"), now="2026-10-10T14:00:00Z").startswith("stoploss guard")
+    assert m.gate(dict(SIGNAL, symbol="ZZZ"), now="2026-10-14T14:00:00Z") is None   # the pause is over
