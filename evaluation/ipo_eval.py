@@ -47,6 +47,7 @@ HOLDOUT_LOG = ROOT / "bench_runs" / "ipo_holdout_log.jsonl"
 LIVE_BYTES = 150_000            # what the live scorer reads of a filing: the cover page, where the offer and range are
 SLIPPAGE = (0.0, 0.005, 0.01, 0.02)
 COVERED = 0.6                   # a year counts as well covered when this share of its IPOs still has prices
+BOOTSTRAP = 1000                # resamples for each confidence interval
 CURSE_K = (2, 5, 10)            # how steeply a retail allocation shrinks as a deal's demand grows
 FEATURES = ["revision", "above_range", "below_range", "no_range", "log_proceeds", "log_price", "bank_share",
             "tech", "biotech", "finance", "foreign", "spy_20d", "heat_30d", "deals_30d"]
@@ -307,6 +308,31 @@ def permutation_p(scores, ys, metric=average_precision, n=1000, seed=7):
         rng.shuffle(s)
         worse += metric(s, ys) >= real
     return (worse + 1) / (n + 1)
+
+
+def bootstrap_ci(scores, ys, metric=average_precision, n=BOOTSTRAP, seed=13, level=0.95):
+    """A 95% interval for a metric: the IPOs resampled with replacement `n` times, the middle 95% of the results.
+    The precision a figure deserves is the width of this interval, not its number of decimals."""
+    rng = random.Random(seed)
+    k = len(ys)
+    vals = []
+    for _ in range(n):
+        idx = [rng.randrange(k) for _ in range(k)]
+        sy = [ys[i] for i in idx]
+        if 0 < sum(sy) < k:
+            vals.append(metric([scores[i] for i in idx], sy))
+    vals.sort()
+    lo, hi = vals[int((1 - level) / 2 * (len(vals) - 1))], vals[int((1 + level) / 2 * (len(vals) - 1))]
+    return lo, hi
+
+
+def p_text(p, n=1000):
+    """A permutation p-value stated exactly: the smallest possible one says so instead of rounding to 0.001."""
+    return f"p < {1 / n:.3f} (none of {n:,} shuffled runs did as well)" if p <= 1 / (n + 1) + 1e-12 else f"p = {p:.3f}"
+
+
+def share(k, n, d=1):
+    return f"{100 * k / n:.{d}f}% ({k} of {n})" if n else "n/a"
 
 
 # ----------------------------------------------------------------------------- 1. walk-forward and holdout
@@ -643,21 +669,24 @@ def report(final=False, again=False):
               "|---|---|---|---|---|---|---|---|---|---|---|"]
     for f in folds:
         c = scorecard(f["scores"], f["ys"], f["threshold"], f["base_rate"])
-        lines.append(f"| {f['year']} | {c['n']} | {c['pops']} | {pct(c['base_rate'], 0)} | {num(c['pr_auc'])} | {num(c['roc_auc'])} | "
+        lines.append(f"| {f['year']} | {c['n']} | {c['pops']} | {100 * c['base_rate']:.1f}% | {num(c['pr_auc'])} | {num(c['roc_auc'])} | "
                      f"{num(c['f1'])} | {num(c['precision'])} | {num(c['recall'])} | {num(c['brier_skill'])} | "
                      f"{num(permutation_p(f['scores'], f['ys']), 3)} |")
     s, y, fs = pooled(folds)
     allc = scorecard(s, y, statistics.fmean(f["threshold"] for f in fs), statistics.fmean(f["base_rate"] for f in fs))
-    lines += ["", f"All test years: PR-AUC {num(allc['pr_auc'])} against a base rate of {pct(allc['base_rate'], 0)} "
-              f"(what a random ranking scores), p = {num(permutation_p(s, y), 3)}; ROC-AUC {num(allc['roc_auc'])}; "
-              f"F1 {num(allc['f1'])}.", ""]
+    ap_lo, ap_hi = bootstrap_ci(s, y)
+    roc_lo, roc_hi = bootstrap_ci(s, y, roc_auc)
+    lines += ["", f"All test years: PR-AUC {num(allc['pr_auc'])} (95% CI {num(ap_lo)} to {num(ap_hi)}) against a base rate of "
+              f"{share(sum(y), len(y))} (what a random ranking scores), a lift of {allc['pr_auc'] / allc['base_rate']:.2f}x "
+              f"({ap_lo / allc['base_rate']:.2f}x to {ap_hi / allc['base_rate']:.2f}x); {p_text(permutation_p(s, y))}; "
+              f"ROC-AUC {num(allc['roc_auc'])} (95% CI {num(roc_lo)} to {num(roc_hi)}); F1 {num(allc['f1'])}.", ""]
     covered = {yr for yr in years if sum(r["prospectus_date"][:4] == yr for r in rows) >= COVERED * sum(r["prospectus_date"][:4] == yr for r in raw)}
     fc = [f for f in folds if str(f["year"]) in covered]
     if fc:
         s3, y3, _ = pooled(fc)
         lines += [f"Only the test years where at least {100 * COVERED:.0f}% of IPOs kept their prices "
                   f"({', '.join(str(f['year']) for f in fc)}): PR-AUC {num(average_precision(s3, y3))} against a base rate of "
-                  f"{pct(sum(y3) / len(y3), 0)}, ROC-AUC {num(roc_auc(s3, y3))}.", ""]
+                  f"{share(sum(y3), len(y3))}, ROC-AUC {num(roc_auc(s3, y3))}.", ""]
     else:
         lines += [f"No test year has prices for {100 * COVERED:.0f}% of its IPOs.", ""]
 
@@ -675,25 +704,29 @@ def report(final=False, again=False):
         span = "all years" if f["window"] is None else f"last {f['window']} years"
         lines.append(f"| {f['year']} | {f['l2']:g} | {span} | "
                      f"{num(average_precision(f['scores'], f['ys']))} | {num(average_precision(fx['scores'], fx['ys'])) if fx else 'n/a'} |")
-    lines += ["", f"All test years: re-optimised PR-AUC {num(average_precision(s4, y4))} against fixed {num(allc['pr_auc'])}.", ""]
+    r_lo, r_hi = bootstrap_ci(s4, y4)
+    lines += ["", f"All test years: re-optimised PR-AUC {num(average_precision(s4, y4))} (95% CI {num(r_lo)} to {num(r_hi)}) against "
+              f"fixed {num(allc['pr_auc'])} ({num(ap_lo)} to {num(ap_hi)}).", ""]
 
     # regimes
-    lines += ["## 1. Market regimes", "", "| Regime | IPOs | base rate | PR-AUC | lift over base | ROC-AUC | F1 |", "|---|---|---|---|---|---|---|"]
+    lines += ["## 1. Market regimes", "", "| Regime | IPOs | base rate | PR-AUC (95% CI) | lift over base | ROC-AUC | F1 |", "|---|---|---|---|---|---|---|"]
     for name, span in REGIMES.items():
         s2, y2, f2 = pooled(folds, span)
         if not y2 or not sum(y2):
             continue
         c = scorecard(s2, y2, statistics.fmean(f["threshold"] for f in f2), statistics.fmean(f["base_rate"] for f in f2))
-        lines.append(f"| {name} | {c['n']} | {pct(c['base_rate'], 0)} | {num(c['pr_auc'])} | {num(c['pr_auc'] / c['base_rate'], 2)}x | "
-                     f"{num(c['roc_auc'])} | {num(c['f1'])} |")
+        lo, hi = bootstrap_ci(s2, y2)
+        lines.append(f"| {name} | {c['n']} | {share(c['pops'], c['n'])} | {num(c['pr_auc'])} ({num(lo)} to {num(hi)}) | "
+                     f"{num(c['pr_auc'] / c['base_rate'], 2)}x | {num(c['roc_auc'])} | {num(c['f1'])} |")
     spy = spy_closes()
     lab = [(spy_regime(spy, r["prices"]["listing_date"]), sc, yv) for f in folds for r, sc, yv in zip(f["rows"], f["scores"], f["ys"])]
     for reg in ("bull", "drawdown", "sideways", "ordinary"):
         sc = [x[1] for x in lab if x[0] == reg]
         yv = [x[2] for x in lab if x[0] == reg]
         if len(yv) >= 20 and sum(yv):
-            lines.append(f"| SPY {reg} on the listing day | {len(yv)} | {pct(sum(yv) / len(yv), 0)} | {num(average_precision(sc, yv))} | "
-                         f"{num(average_precision(sc, yv) / (sum(yv) / len(yv)), 2)}x | {num(roc_auc(sc, yv))} | n/a |")
+            lo, hi = bootstrap_ci(sc, yv)
+            lines.append(f"| SPY {reg} on the listing day | {len(yv)} | {share(sum(yv), len(yv))} | {num(average_precision(sc, yv))} "
+                         f"({num(lo)} to {num(hi)}) | {num(average_precision(sc, yv) / (sum(yv) / len(yv)), 2)}x | {num(roc_auc(sc, yv))} | n/a |")
         else:
             lines.append(f"| SPY {reg} on the listing day | {len(yv)} | too few to score | | | | |")
     lines.append("")
@@ -749,8 +782,8 @@ def report(final=False, again=False):
     lines += [f"| pure noise, added and refitted (the floor) | n/a | {drop['noise (added)']:+.4f} |", ""]
 
     # 2. imbalance
-    lines += ["## 2. Class imbalance", "", f"Over the test years {allc['pops']} of {allc['n']} IPOs popped ({pct(allc['base_rate'], 0)}). "
-              f"Accuracy {pct(allc['accuracy'], 0)} looks fine until set beside always saying no: {pct(allc['accuracy_always_no'], 0)}. "
+    lines += ["## 2. Class imbalance", "", f"Over the test years {allc['pops']} of {allc['n']} IPOs popped ({100 * allc['base_rate']:.1f}%). "
+              f"Accuracy {100 * allc['accuracy']:.1f}% looks fine until set beside always saying no: {100 * allc['accuracy_always_no']:.1f}%. "
               f"PR-AUC {num(allc['pr_auc'])} (random: {num(allc['base_rate'])}), F1 {num(allc['f1'])}, precision "
               f"{num(allc['precision'])}, recall {num(allc['recall'])}, Brier skill {num(allc['brier_skill'])}.", ""]
 
@@ -758,7 +791,7 @@ def report(final=False, again=False):
     lines += ["## 3. Slippage, buying at the open", "", "| Picks | exit | slippage | n | mean | median | win rate |", "|---|---|---|---|---|---|---|"]
     for sl in FRICTION:
         for (name, label), v in at_open(folds, sl).items():
-            lines.append(f"| {name} | {label} | {100 * sl:.2f}% each way | {v['n']} | {pct(v['mean'])} | {pct(v['median'])} | {pct(v['win_rate'], 0)} |")
+            lines.append(f"| {name} | {label} | {100 * sl:.2f}% each way | {v['n']} | {pct(v['mean'], 2)} | {pct(v['median'], 2)} | {100 * v['win_rate']:.1f}% |")
     be1, be21 = break_even_friction(folds), break_even_friction(folds, "close_21")
     lines += ["", f"Break-even friction, each way, for buying every IPO at the open: {100 * be1:.2f}% held to the first close, "
               f"{100 * be21:.2f}% held 21 days (0 means it loses money before any cost).", ""]
@@ -770,8 +803,8 @@ def report(final=False, again=False):
               "| Picks | n | as asked | " + " | ".join(f"allocated k={k} (filled)" for k in CURSE_K) + " |",
               "|---|---|---|" + "---|" * len(CURSE_K)]
     for name, v in curse.items():
-        lines.append(f"| {name} | {v['n']} | {pct(v['as asked'])} | " +
-                     " | ".join(f"{pct(v[f'allocated k={k}'])} ({100 * v[f'filled k={k}']:.0f}%)" for k in CURSE_K) + " |")
+        lines.append(f"| {name} | {v['n']} | {pct(v['as asked'], 2)} | " +
+                     " | ".join(f"{pct(v[f'allocated k={k}'], 2)} ({100 * v[f'filled k={k}']:.1f}%)" for k in CURSE_K) + " |")
     lines.append("")
 
     # 3. stress

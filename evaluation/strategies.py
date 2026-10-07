@@ -345,7 +345,7 @@ def flips(base, others):
 
 # ----------------------------------------------------------------------------- the report
 
-def pct(x, d=1):
+def pct(x, d=2):
     return "n/a" if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))) else f"{100 * x:+.{d}f}%"
 
 
@@ -355,7 +355,7 @@ def trade_cells(m):
         return "n/a | | | | "
     pf = m["profit_factor"]
     pf_text = "n/a" if math.isnan(pf) else "no losses" if math.isinf(pf) else f"{pf:.2f}"
-    return f"{pct(m['win_rate'], 0)} | ${m['avg_win']:.0f} | ${m['avg_loss']:.0f} | {pf_text} | ${m['expectancy']:.0f}"
+    return f"{100 * m['win_rate']:.1f}% | ${m['avg_win']:,.2f} | ${m['avg_loss']:,.2f} | {pf_text} | ${m['expectancy']:,.2f}"
 
 
 def report():
@@ -369,13 +369,13 @@ def report():
     bh = metrics(buy_and_hold(dates, bars))
     out += ["## Results (base costs)", "", "| Bot | net return | CAGR | vs holding SPY | max drawdown | time invested | trades | win rate | avg win | avg loss | profit factor | expectancy |",
             "|---|---|---|---|---|---|---|---|---|---|---|---|",
-            f"| Buy and hold SPY | {pct(bh['net_return'])} | {pct(bh['cagr'])} | | {pct(bh['max_drawdown'])} | {pct(bh['exposure'], 0)} | {bh['trades']} | | | | | |"]
+            f"| Buy and hold SPY | {pct(bh['net_return'])} | {pct(bh['cagr'])} | | {pct(bh['max_drawdown'])} | {100 * bh['exposure']:.1f}% | {bh['trades']} | | | | | |"]
     results = {}
     for key, make in BOTS.items():
         m = metrics(simulate(make(), dates, bars))
         results[key] = m
         out.append(f"| {make()['name']} | {pct(m['net_return'])} | {pct(m['cagr'])} | {pct(edge(m, bh))} | {pct(m['max_drawdown'])} | "
-                   f"{pct(m['exposure'], 0)} | {m['trades']} | {trade_cells(m)} |")
+                   f"{100 * m['exposure']:.1f}% | {m['trades']} | {trade_cells(m)} |")
     out += ["", "DCA's net return is on the money put in (weekly $100); its CAGR and drawdown use a time-weighted index.", ""]
 
     out += ["## Stress tests: CAGR against holding SPY", "", "| Bot | base | 1.5x costs | 2x costs | fills a day late | first half | second half | parameters nudged 20% | verdict |",
@@ -412,7 +412,7 @@ def report():
         row = []
         for reg in ("bull", "drawdown", "sideways", "ordinary"):
             diffs = [(curve[k] / curve[k - 1] - 1) - (bh_curve[k] / bh_curve[k - 1] - 1) for k in range(1, len(dates)) if labels[k] == reg]
-            row.append(f"{100 * 252 * statistics.fmean(diffs):+.1f}% a yr ({len(diffs)} d)" if len(diffs) > 20 else "too few days")
+            row.append(f"{100 * 252 * statistics.fmean(diffs):+.2f}% a yr ({len(diffs)} d)" if len(diffs) > 20 else "too few days")
         out.append(f"| {make()['name']} | " + " | ".join(row) + " |")
     out += ["", "Annualised difference in daily return from holding SPY, on the days the market was in each state "
             "(labelled from SPY's past year only).", ""]
@@ -434,8 +434,8 @@ def framework_checks():
         split = simulate(make(), d2, b2, extras=e2)
         vol = simulate(make(), d2, b2, extras=e2, volume_share=True)
         per = simulate(make(), d2, b2, extras=e2, volume_share=True, per_share=True)
-        out.append(f"| {make()['name']} | {pct(base['cagr'])} | {pct(metrics(split)['cagr'])} (dividends ${split['dividends']:,.0f}) | "
-                   f"{pct(metrics(vol)['cagr'])} ({vol['capped_fills']} capped) | {pct(metrics(per)['cagr'])} (commissions ${per['commissions']:,.0f}) |")
+        out.append(f"| {make()['name']} | {pct(base['cagr'])} | {pct(metrics(split)['cagr'])} (dividends ${split['dividends']:,.2f}) | "
+                   f"{pct(metrics(vol)['cagr'])} ({vol['capped_fills']} capped) | {pct(metrics(per)['cagr'])} (commissions ${per['commissions']:,.2f}) |")
     out += ["", "CAGR on the same days. The split-adjusted run should land close to the adjusted one for a bot that is always "
             "invested (dividends end up in cash instead of compounding in the price); a big gap would mean the price series "
             "was doing work it shouldn't. At $10,000 an order, volume caps never bind in SPY or IEF: the column checks the "

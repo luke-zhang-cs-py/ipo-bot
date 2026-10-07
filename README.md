@@ -46,11 +46,11 @@ on 30 US large caps, 15 country ETFs and the 9 US sector ETFs, each seeing only 
 |---|---|
 | 36 algorithm-universe-horizon tests, permutation p-values, false-discovery rate 10% | 4 pass a naive 5% bar; **0 of 36** survive |
 | Picked on 2009-2017, checked from 2018 | 1 of 5 held up |
-| 12-month 80% ranges | held the outcome only 70% to 77% of the time |
-| Chosen on 2018-2023, tested once from 2024 (recorded, not re-run) | 0 of 1 held up |
-| Five beginner bots (DCA, 60/40 rebalancing, trend, mean reversion, grid), 2005-2026, 0.30% a round trip | none beat holding SPY; trend is fragile (ahead only in 2005-2015) |
-| A pre-listing IPO model, walk-forward 2018-2023 on 1,201 priced IPOs | PR-AUC 0.66 against a 0.40 base rate (p = 0.001); weak in the 2022-23 bear market; nothing left once trading opens |
-| Paper bot replayed over 2026 on real prices, every guardrail on | +10.7% against SPY's +13.8%, beta 0.34; 38% of signals stopped by the price-deviation guard ([`tracking/`](tracking/)) |
+| 12-month 80% ranges, 18 algorithm-universe pairs | held the outcome only 70.0% to 77.4% of the time |
+| Chosen on 2018-2023, tested once from 2024 (recorded, not re-run) | 0 of 1 held up: rank IC +0.064 (p = 0.027) became -0.033 (p = 0.518) |
+| Five beginner bots, 2005-2026, 0.30% a round trip, against holding SPY (+10.94% a year) | DCA +0.01, rebalancing 60/40 -2.69, trend 50/200 -2.28 (fragile: +0.80 in 2005-2015, -5.25 after), mean reversion -8.36, grid -8.73 points a year |
+| A pre-listing IPO model, walk-forward 2018-2023 (696 test IPOs) | PR-AUC 0.659 (95% CI 0.594 to 0.717) against a 0.402 base rate, p < 0.001; 2022-23 only 0.388 (0.214 to 0.559) against 0.205; bought at the open, its top fifth makes +0.80% on day 1 against +3.44% for every IPO |
+| Paper bot replayed over 2026 on real prices, every guardrail on | +10.71% against SPY's +13.77%, beta 0.339 (95% CI 0.247 to 0.423); 33 of 86 signals (38.4%) stopped by the price-deviation guard ([`tracking/`](tracking/)) |
 
 Simple price signals give no 12-month edge that holds up, and ranges drawn from history are too narrow; both findings
 went back into the prompt. Every backtest fills at the next open, charges costs, and is re-run at 1.5x and 2x costs,
@@ -73,7 +73,7 @@ python evaluation/tracker.py                             # the paper bot against
 ## Tests
 
 ```bash
-python -m pytest -q tests                  # 172 offline tests, free (10 need Node: the browser demo against the Python)
+python -m pytest -q tests                  # 173 offline tests, free (10 need Node: the browser demo against the Python)
 IPO_BOT_LIVE=1 python -m pytest -q tests/test_live_market.py   # 15 live checks on real SEC filings and prices
 python testkit/kit.py regress --yes        # the test kit, live: calculation cases, hallucination traps, a tools-off
                                            # stale-data test, rule tests; costs API credit

@@ -236,3 +236,15 @@ def test_a_range_filed_on_the_listing_day_is_not_used():
     assert f["no_range"] == 1.0 and f["revision"] == 0.0 and f["above_range"] == 0.0
     audit = E.leakage_audit([r] + [x for x in ROWS[:60]])
     assert audit["range_after_listing"] == [r["adsh"]] and audit["range_after_listing_used"] == []
+
+
+def test_confidence_intervals_bracket_the_estimate_and_narrow_with_more_data():
+    dev, _ = E.split(ROWS)
+    s, y, _ = E.pooled(E.walk_forward(dev, MARKET))
+    lo, hi = E.bootstrap_ci(s, y, n=300)
+    assert lo < E.average_precision(s, y) < hi
+    half = len(y) // 4
+    lo2, hi2 = E.bootstrap_ci(s[:half], y[:half], n=300)
+    assert (hi2 - lo2) > (hi - lo)                                   # a quarter of the IPOs: a wider interval
+    assert E.p_text(1 / 1001).startswith("p < 0.001") and E.p_text(0.0421) == "p = 0.042"
+    assert E.share(280, 696) == "40.2% (280 of 696)"

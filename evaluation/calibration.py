@@ -362,7 +362,7 @@ def report(refresh=False, ledger=False):
                            f"{pct(band['r2_os'][0], 2)} to {pct(band['r2_os'][1], 2)} | "
                            f"{pct(s['bss'], 2)}{outside(s['bss'], band['bss'])} | "
                            f"{100 * s['ece']:.1f} pts{outside(s['ece'], band['ece'], better_high=False)} | "
-                           f"{100 * c[50]:.0f}% | {100 * c[80]:.0f}% | {100 * c[90]:.0f}% | {100 * s['normal80']:.0f}% |")
+                           f"{100 * c[50]:.1f}% | {100 * c[80]:.1f}% | {100 * c[90]:.1f}% | {100 * s['normal80']:.1f}% |")
             m = market_level(per[RANDOM])
             out += ["", f"Market level (shared by every algorithm: the running average of past returns): forecast "
                     f"{pct(m['f'])} on average, realised {pct(m['y'])}; slope {m['slope']:.2f}; direction right in "
