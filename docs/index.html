@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IPO bot: research memos with the checks built in</title>
+<meta name="description" content="An IPO and stock research bot on Claude: SEC EDGAR, FRED and market data, one-page memos with scenarios and a stop-working price, every number checked, and an honest benchmark against simple prediction algorithms.">
+<style>
+:root { --bg: #f7f8f6; --card: #fff; --ink: #14181c; --muted: #5b646d; --rule: #d9dedf; --accent: #0f766e; --soft: #eef2f1; color-scheme: light; }
+@media (prefers-color-scheme: dark) { :root { --bg: #111416; --card: #181c1f; --ink: #e9edef; --muted: #9aa4ac; --rule: #2a3135; --accent: #2dd4bf; --soft: #1f2528; color-scheme: dark; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 760px; margin: 0 auto; padding: 36px 18px 56px; }
+h1 { font-size: 2rem; line-height: 1.15; margin: 0 0 8px; letter-spacing: -0.015em; }
+h2 { font-size: 1.25rem; margin: 34px 0 8px; }
+p, li { max-width: 68ch; }
+.lede { font-size: 1.1rem; color: var(--muted); margin: 0 0 18px; }
+.cta { display: inline-block; background: var(--ink); color: var(--bg); text-decoration: none; font-weight: 700; padding: 9px 16px; border-radius: 8px; margin-right: 8px; }
+.cta.ghost { background: transparent; color: var(--ink); border: 1px solid var(--ink); }
+img { max-width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 10px; margin: 18px 0 4px; }
+.cap { color: var(--muted); font-size: .9rem; margin: 0; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .92rem; font-variant-numeric: tabular-nums; margin: 8px 0; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+code { background: var(--soft); padding: 1px 5px; border-radius: 4px; font-size: .9em; }
+pre { background: var(--soft); padding: 12px; border-radius: 8px; overflow-x: auto; font-size: .85rem; }
+a { color: var(--accent); }
+.foot { color: var(--muted); font-size: .88rem; margin-top: 40px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>IPO bot</h1>
+  <p class="lede">An IPO and stock research assistant on Claude that answers in a one-page memo, then lets code check every number in it.</p>
+  <p><a class="cta" href="app/">Try the sizing and checking tools →</a><a class="cta ghost" href="https://github.com/luke-zhang-cs-py/ipo-bot">Source</a></p>
+  <img src="demo.gif" width="960" height="600" alt="Sizing a purchase by portfolio rules: moving the stop-working price changes which limit binds; then a memo's KEY NUMBERS block failing the EV and rating checks">
+  <p class="cap">The two parts that run without an API key: sizing a purchase by your own rules, and checking a memo's numbers.
+    Both are ported from the Python and tested against it case by case.</p>
+
+  <h2>What it does</h2>
+  <p>Ask about an IPO, a listed stock or the market. The bot reads SEC filings, XBRL financials, FRED macro series, market data and the
+    web, does every calculation in a calculator tool, and answers in one page: a rating, bull, base and bear scenarios that add up to
+    100%, a probability-weighted value, a <em>stop-working price</em> (where it would drop the view), dated catalysts and sources.
+    An IPO gets two ratings, because the offer price and the first trade are different prices for different buyers.</p>
+  <p>With a portfolio file loaded it decides buy, add, hold, trim or sell, but it never chooses the size: the smallest of four limits
+    from your own rules does (risk per trade, position cap, sector cap, cash floor).</p>
+
+  <h2>Why trust a number in it</h2>
+  <ul>
+    <li><b>Eleven accuracy checks run before every answer:</b> identity (ticker, exchange, share class), freshness, reconciliation
+      (market cap, EV, multiples, parts to totals), periods and units, outliers, the primary filing, scenario consistency, citations,
+      and "unknown" instead of a guess.</li>
+    <li><b>A KEY NUMBERS block ends every memo</b>, and <code>verify.py</code> recomputes it: the maths, the scenario rules, the rating
+      thresholds, sources and dates. The demo's checker is the same code.</li>
+    <li><b>A second model audits the answer</b> against its sources, rule by rule, with a schema-checked pass or fail.</li>
+    <li><b>A test kit</b>: exact calculation cases, hallucination traps (a fake company, a made-up ticker, a future date), a tools-off
+      stale-data test, rule tests, a consistency test, and a backtest that cuts the data tools off at the day before an IPO prices.</li>
+  </ul>
+
+  <h2>What the evaluation found</h2>
+  <p>A model that knows how 2009 to 2026 turned out cannot be backtested fairly, so the bot is scored forward: each rating is logged with
+    its price and scenarios. To give it a bar to clear, seven simple prediction algorithms were tested month by month on 30 US large
+    caps, 15 country ETFs and the nine US sector ETFs, each seeing only the prices known on the day.</p>
+  <div class="tablewrap"><table>
+    <tr><th>Test</th><th>Result</th></tr>
+    <tr><td>Multiple testing: 36 algorithm, universe and horizon tests, permutation p-values, false-discovery rate 10%</td><td>4 pass a naive 5% bar; <b>0</b> survive the correction</td></tr>
+    <tr><td>Holdout: picked on 2009 to 2017, checked from 2018</td><td><b>1</b> of 5 held up</td></tr>
+    <tr><td>Calibration of 12-month 80% ranges</td><td>held the outcome only <b>70% to 77%</b> of the time</td></tr>
+    <tr><td>Trading costs, top third rebalanced monthly</td><td>a reversal signal ends up <b>8.4</b> points a year behind simply holding everything, at 50 basis points a trade</td></tr>
+  </table></div>
+  <p>So simple price signals do not give a 12-month edge that holds up, and ranges drawn from history are too narrow. Both findings
+    went back into the prompt: wider bull and bear cases, and +15% treated as a high bar.</p>
+
+  <h2>Run it</h2>
+<pre>pip install -r requirements.txt
+python ipo_bot.py "Rate the &lt;company&gt; IPO"          # needs ANTHROPIC_API_KEY
+python -m pytest -q tests                            # 100 offline tests, free</pre>
+
+  <h2>Limits</h2>
+  <ul>
+    <li>No live run is recorded here: every live test needs an API key and costs credit.</li>
+    <li>The benchmark's stock universes are today's survivors, which flatters long-only results; the sector ETFs are the
+      survivor-free check.</li>
+    <li>It gives views on securities, not personal advice, and every answer ends with that disclaimer.</li>
+  </ul>
+  <p class="foot">Built by <a href="https://luke-zhang-cs-py.github.io/">Luke Zhang</a>. For information only, not investment advice.</p>
+</main>
+</body>
+</html>

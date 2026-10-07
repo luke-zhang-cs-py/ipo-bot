@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IPO bot: size a trade, check a memo</title>
+<meta name="description" content="Two parts of the IPO bot that run without an API key: sizing a purchase by your own portfolio rules, and checking a memo's KEY NUMBERS block.">
+<style>
+:root { --bg: #f7f8f6; --card: #ffffff; --ink: #14181c; --muted: #5b646d; --rule: #d9dedf; --accent: #0f766e; --bad: #b42318; --good: #067647; --warn: #b54708; --soft: #eef2f1; color-scheme: light; }
+@media (prefers-color-scheme: dark) { :root { --bg: #111416; --card: #181c1f; --ink: #e9edef; --muted: #9aa4ac; --rule: #2a3135; --accent: #2dd4bf; --bad: #f97066; --good: #47cd89; --warn: #fdb022; --soft: #1f2528; color-scheme: dark; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 28px 18px 48px; }
+h1 { font-size: 1.8rem; line-height: 1.15; margin: 0 0 6px; letter-spacing: -0.01em; }
+.lede { color: var(--muted); margin: 0 0 20px; max-width: 70ch; }
+.tabs { display: inline-flex; gap: 4px; border: 1px solid var(--rule); border-radius: 999px; padding: 3px; margin-bottom: 18px; flex-wrap: wrap; }
+.tabs button { border: 0; background: none; color: var(--muted); font: inherit; font-weight: 650; padding: 7px 14px; border-radius: 999px; cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--ink); color: var(--bg); }
+.panel { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 900px) { .panel { grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); } }
+.card { background: var(--card); border: 1px solid var(--rule); border-radius: 12px; padding: 16px; min-width: 0; }
+h2 { font-size: 1.05rem; margin: 0 0 10px; }
+label { display: flex; flex-direction: column; gap: 3px; font-size: .8rem; color: var(--muted); }
+input, select, textarea { font: inherit; font-size: .9rem; color: var(--ink); background: var(--bg); border: 1px solid var(--rule); border-radius: 7px; padding: 6px 8px; min-width: 0; }
+textarea { width: 100%; min-height: 360px; font-family: ui-monospace, Consolas, monospace; font-size: .78rem; line-height: 1.4; }
+.grid4 { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .85rem; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; }
+td input { width: 100%; min-width: 64px; padding: 4px 6px; }
+.btn { font: inherit; font-weight: 650; border: 1px solid var(--ink); background: var(--ink); color: var(--bg); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+.btn.ghost { background: transparent; color: var(--ink); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+.big { font-size: 2rem; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); font-size: .85rem; }
+.bars { display: grid; gap: 7px; margin-top: 12px; }
+.bar { display: grid; grid-template-columns: 5.5rem 1fr 4.5rem; gap: 8px; align-items: center; font-size: .85rem; font-variant-numeric: tabular-nums; }
+.track { height: 10px; background: var(--soft); border-radius: 5px; overflow: hidden; }
+.fill { height: 100%; background: var(--muted); border-radius: 5px; }
+.bar.bind .fill { background: var(--accent); } .bar.bind span:first-child { font-weight: 750; }
+.err { color: var(--bad); font-weight: 650; }
+.breach { color: var(--warn); font-size: .85rem; margin: 6px 0 0; }
+.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: .88rem; }
+.checks li { display: grid; grid-template-columns: 1.4rem 1fr; gap: 4px; }
+.checks .ok::before { content: "✓"; color: var(--good); font-weight: 800; } .checks .no::before { content: "✗"; color: var(--bad); font-weight: 800; }
+.checks .no { color: var(--bad); }
+.checks small { grid-column: 2; color: var(--muted); }
+.score { font-size: 1.05rem; font-weight: 750; margin-bottom: 8px; }
+.foot { margin-top: 22px; color: var(--muted); font-size: .85rem; }
+a { color: var(--accent); }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <h1>IPO bot: size a trade, check a memo</h1>
+  <p class="lede">The bot writes research memos with Claude and live data, which needs an API key. These two parts don't: they are the same
+    rules, ported from the Python and tested against it case by case. Nothing you type leaves the page.
+    <a href="../">Read the write-up</a> · <a href="https://github.com/luke-zhang-cs-py/ipo-bot">Source</a></p>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" id="t-size" aria-selected="true" aria-controls="p-size">Size a trade</button>
+    <button role="tab" id="t-check" aria-selected="false" aria-controls="p-check">Check a memo's numbers</button>
+  </div>
+
+  <section id="p-size" class="panel" role="tabpanel" aria-labelledby="t-size">
+    <div class="card">
+      <h2>Your portfolio and rules</h2>
+      <div class="tablewrap"><table id="holdings"><thead><tr><th>Symbol</th><th>Shares</th><th>Price</th><th>Cost basis</th><th>Sector</th></tr></thead><tbody></tbody></table></div>
+      <div class="grid4" style="margin-top:12px">
+        <label>Cash <input id="cash" type="number" step="any" min="0"></label>
+        <label>Max per stock % <input id="r-pos" type="number" step="any" min="0" max="100"></label>
+        <label>Max per sector % <input id="r-sec" type="number" step="any" min="0" max="100"></label>
+        <label>Risk per trade % <input id="r-risk" type="number" step="any" min="0" max="100"></label>
+        <label>Cash floor % <input id="r-cash" type="number" step="any" min="0" max="100"></label>
+      </div>
+      <p class="muted" style="margin:10px 0 0">The example holdings are placeholders. The most you lose if a trade reaches its stop-working
+        price is the risk budget: portfolio value × risk per trade × conviction (Low 0.5, Medium 1, High 1.5).</p>
+      <div id="breaches"></div>
+    </div>
+    <div class="card">
+      <h2>The trade</h2>
+      <div class="grid4">
+        <label>Symbol <input id="sym" value="DDD"></label>
+        <label>Entry price <input id="entry" type="number" step="any" value="50"></label>
+        <label>Stop-working price <input id="stop" type="number" step="any" value="45"></label>
+        <label>Conviction <select id="conv"><option>Low</option><option selected>Medium</option><option>High</option></select></label>
+        <label>Sector <input id="sector" value="Energy"></label>
+      </div>
+      <div id="result" style="margin-top:16px"></div>
+    </div>
+  </section>
+
+  <section id="p-check" class="panel" role="tabpanel" aria-labelledby="t-check" hidden>
+    <div class="card">
+      <h2>A memo's KEY NUMBERS block</h2>
+      <p class="muted" style="margin:0 0 8px">Every full memo ends with this block so code can check it. Paste one, or edit the example: change a
+        probability, the share count or the rating and watch the checks.</p>
+      <textarea id="memo" spellcheck="false" aria-label="KEY NUMBERS block"></textarea>
+      <div class="row">
+        <button class="btn ghost" data-load="good">Consistent example</button>
+        <button class="btn ghost" data-load="ev">EV that doesn't add up</button>
+        <button class="btn ghost" data-load="rating">Rating against the numbers</button>
+        <button class="btn ghost" data-load="stale">Unflagged stale price</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Checks</h2>
+      <div id="score" class="score"></div>
+      <ul id="checks" class="checks"></ul>
+    </div>
+  </section>
+
+  <p class="foot">Example figures are placeholders, not a real company. For information only, not investment advice.</p>
+</main>
+<script src="ipo-core.js"></script>
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const fmt = (x, d = 2) => Number(x).toLocaleString("en-CA", { minimumFractionDigits: d, maximumFractionDigits: d });
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  // ---------- tabs
+  for (const t of document.querySelectorAll('[role="tab"]')) t.addEventListener("click", () => {
+    for (const u of document.querySelectorAll('[role="tab"]')) { u.setAttribute("aria-selected", u === t ? "true" : "false"); $(u.getAttribute("aria-controls")).hidden = u !== t; }
+  });
+
+  // ---------- sizing
+  const EXAMPLE = { as_of: "2026-10-01", cash: 4000, holdings: [
+    { symbol: "AAA", shares: 20, cost_basis: 150, sector: "Technology", price: 180 },
+    { symbol: "BBB", shares: 40, cost_basis: 50, sector: "Financials", price: 55 },
+    { symbol: "CCC", shares: 15, cost_basis: 110, sector: "Health Care", price: 100 },
+    { symbol: "", shares: "", cost_basis: "", sector: "", price: "" } ],
+    rules: { max_position_pct: 25, max_sector_pct: 40, risk_per_trade_pct: 1, min_cash_pct: 5 } };
+  const body = document.querySelector("#holdings tbody");
+  for (const h of EXAMPLE.holdings) {
+    const tr = document.createElement("tr");
+    for (const k of ["symbol", "shares", "price", "cost_basis", "sector"]) {
+      const td = document.createElement("td"), inp = document.createElement("input");
+      inp.dataset.k = k; inp.value = h[k]; if (k !== "symbol" && k !== "sector") { inp.type = "number"; inp.step = "any"; }
+      inp.setAttribute("aria-label", k.replace("_", " ")); td.append(inp); tr.append(td);
+    }
+    body.append(tr);
+  }
+  $("cash").value = EXAMPLE.cash; $("r-pos").value = EXAMPLE.rules.max_position_pct; $("r-sec").value = EXAMPLE.rules.max_sector_pct;
+  $("r-risk").value = EXAMPLE.rules.risk_per_trade_pct; $("r-cash").value = EXAMPLE.rules.min_cash_pct;
+  const n = (v) => v === "" ? undefined : Number(v);
+
+  function readPortfolio() {
+    const holdings = [...body.rows].map((tr) => Object.fromEntries([...tr.querySelectorAll("input")].map((i) => [i.dataset.k, i.value.trim()])))
+      .filter((h) => h.symbol).map((h) => ({ symbol: h.symbol, shares: n(h.shares) ?? 0, price: n(h.price) ?? null, cost_basis: n(h.cost_basis) ?? null, sector: h.sector || "Unknown" }));
+    return { as_of: EXAMPLE.as_of, cash: n($("cash").value) ?? 0, holdings,
+      rules: { max_position_pct: n($("r-pos").value), max_sector_pct: n($("r-sec").value), risk_per_trade_pct: n($("r-risk").value), min_cash_pct: n($("r-cash").value) } };
+  }
+
+  function size() {
+    const out = $("result"), br = $("breaches");
+    try {
+      const view = IpoCore.valued(IpoCore.validate(readPortfolio()));
+      br.innerHTML = view.rule_breaches.map((b) => '<p class="breach">' + (b.rule === "max_position_pct" ? esc(b.symbol) + " is " + b.weight_pct + "% of the portfolio, over the cap: trim " + b.shares_over + " shares."
+        : b.rule === "max_sector_pct" ? esc(b.sector) + " is " + b.weight_pct + "%, over the sector cap." : "Cash is " + b.cash_pct + "%, under the floor.") + "</p>").join("") +
+        (view.unpriced.length ? '<p class="breach">No price for ' + esc(view.unpriced.join(", ")) + ": left out of the totals.</p>" : "");
+      const s = IpoCore.sizePosition(view, $("sym").value || "NEW", n($("entry").value), n($("stop").value), $("conv").value, $("sector").value.trim() || null);
+      const max = Math.max(...Object.values(s.limits_in_shares), 1);
+      const names = { risk: "Risk", position: "Position", sector: "Sector", cash: "Cash" };
+      out.innerHTML = '<div class="big">' + s.shares + ' shares</div><p class="muted" style="margin:6px 0 0">$' + fmt(s.cost) + " at $" + fmt(s.entry_price) +
+        ". If it falls to the stop-working price of $" + fmt(s.stop_price) + ", you lose $" + fmt(s.loss_at_stop) + " of a $" + fmt(s.risk_budget) + " risk budget. " +
+        esc(s.symbol) + " becomes " + s.weight_after_pct + "% of the portfolio; $" + fmt(s.cash_after) + " cash is left.</p>" +
+        '<div class="bars">' + Object.entries(s.limits_in_shares).map(([k, v]) => '<div class="bar' + (k === s.binding_rule ? " bind" : "") + '"><span>' + names[k] +
+        '</span><div class="track"><div class="fill" style="width:' + Math.max(2, 100 * Math.max(0, v) / max) + '%"></div></div><span>' + v + " sh</span></div>").join("") +
+        '</div><p class="muted">The smallest limit wins: <b>' + names[s.binding_rule].toLowerCase() + "</b>. Portfolio value $" + fmt(view.equity) + ".</p>";
+    } catch (e) { br.innerHTML = ""; out.innerHTML = '<p class="err">' + esc(e.message) + "</p>"; }
+  }
+  document.querySelector("#p-size").addEventListener("input", size);
+  size();
+
+  // ---------- memo checks
+  const GOOD = { key_numbers: {
+    subject: { company: "Example Corp", ticker: "EXM", exchange: "NYSE", share_class: "common", type: "listed" }, as_of: "2026-10-06",
+    inputs: {
+      price: { value: 50, unit: "USD", as_of: "2026-10-05", source: "[1] quote", basis: "last close" },
+      diluted_shares: { value: 100000000, unit: "shares", as_of: "2026-06-30", source: "[2] 10-Q p.3" },
+      debt: { value: 1000000000, unit: "USD", as_of: "2026-06-30", source: "[2] 10-Q balance sheet" },
+      cash: { value: 500000000, unit: "USD", as_of: "2026-06-30", source: "[2] 10-Q balance sheet" },
+      revenue: { value: 1100000000, unit: "USD", as_of: "2026-06-30", source: "[2] 10-Q p.5", period: "LTM to 2026-06-30" } },
+    outputs: { market_cap: 5000000000, enterprise_value: 5500000000, multiples: [{ name: "EV/Revenue LTM", numerator: "enterprise_value", denominator: "revenue", value: 5.0 }] },
+    scenarios: { reference_price: 50, bull: { value: 80, prob: 30 }, base: { value: 62, prob: 50 }, bear: { value: 35, prob: 20 }, pwv: 62, expected_return_pct: 24 },
+    rating: "Overweight", conviction: "Medium", stop_working_price: 35, flags: [], unknown: [],
+    sources: [{ id: 1, title: "quote", url: "https://example.com/quote", date: "2026-10-05" }, { id: 2, title: "10-Q", url: "https://example.com/10q", date: "2026-08-01" }] } };
+  const variants = {
+    good: (k) => k,
+    ev: (k) => { k.outputs.enterprise_value = 5000000000; return k; },
+    // A gloomier bear case: the numbers now say Equal-weight (+10.5%), the block still says Overweight.
+    rating: (k) => { k.scenarios.bull.prob = 15; k.scenarios.base.prob = 50; k.scenarios.bear.prob = 35; k.scenarios.pwv = 55.25; k.scenarios.expected_return_pct = 10.5; return k; },
+    stale: (k) => { k.inputs.price.as_of = "2026-09-25"; return k; },
+  };
+  function load(which) {
+    const k = variants[which](JSON.parse(JSON.stringify(GOOD.key_numbers)));
+    $("memo").value = "```json\n" + JSON.stringify({ key_numbers: k }, null, 1) + "\n```";
+    checkNow();
+  }
+  function checkNow() {
+    const text = $("memo").value.includes("```json") ? $("memo").value : "```json\n" + $("memo").value + "\n```";
+    const res = IpoCore.checkMemo(text), bad = res.filter((r) => !r[1]);
+    $("score").textContent = bad.length ? bad.length + " of " + res.length + " checks fail" : "All " + res.length + " checks pass";
+    $("score").style.color = bad.length ? "var(--bad)" : "var(--good)";
+    $("checks").innerHTML = res.sort((a, b) => a[1] - b[1]).map(([name, ok, detail]) => '<li class="' + (ok ? "ok" : "no") + '">' + esc(name) +
+      (!ok && detail ? "<small>" + esc(detail) + "</small>" : "") + "</li>").join("");
+  }
+  for (const b of document.querySelectorAll("[data-load]")) b.addEventListener("click", () => load(b.dataset.load));
+  $("memo").addEventListener("input", checkNow);
+  load(location.hash === "#check" ? "rating" : "good");
+  if (location.hash === "#check") $("t-check").click();
+})();
+</script>
+</body>
+</html>

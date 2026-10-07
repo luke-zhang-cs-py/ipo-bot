@@ -1,0 +1,21 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  offline:
+    # Pinned, not ubuntu-latest: a runner image changing under the job is a failure with no code change behind it.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q tests   # the live tests skip themselves without IPO_BOT_LIVE
