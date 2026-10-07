@@ -33,6 +33,30 @@ def test_every_sector_the_map_can_give_is_a_known_one():
         assert build_nyse.sic_sector(code) in build_nyse.SECTORS
 
 
+def test_a_failed_lookup_is_retried_next_run_not_cached():
+    calls = {}
+
+    def lookup(cik):
+        calls[cik] = calls.get(cik, 0) + 1
+        if cik == 2:
+            raise OSError("throttled")
+        return [str(6000 + cik), "SOME INDUSTRY"]
+
+    cache = {}
+    failed = build_nyse.look_up_all([1, 2, 3], lookup, cache, interval=0, workers=2, retries=3, backoff=0)
+    assert failed == [2] and set(cache) == {"1", "3"} and calls[2] == 3       # three tries, then left for the next run
+    assert build_nyse.look_up_all([2], lambda cik: ["6798", "REIT"], cache, interval=0, backoff=0) == []
+    assert cache["2"] == ["6798", "REIT"]
+
+
+def test_rows_are_sorted_with_sector_and_readable_industry():
+    fields = {"cik": 0, "name": 1, "ticker": 2}
+    rows = build_nyse.rows_for([[7, "Zed Co", "ZED"], [5, "Abc Inc", "ABC"], [9, "No Sic", "NOS"]], fields,
+                               {"7": ["4911", "ELECTRIC SERVICES"], "5": ["7372", "SERVICES-PREPACKAGED SOFTWARE"]})
+    assert rows == [["ABC", "Abc Inc", 5, "Technology", "Services-Prepackaged Software"], ["NOS", "No Sic", 9, "Other", ""],
+                    ["ZED", "Zed Co", 7, "Utilities", "Electric Services"]]
+
+
 def test_the_list_is_the_whole_nyse_and_well_formed():
     rows, f = DATA["rows"], {k: i for i, k in enumerate(DATA["fields"])}
     assert DATA["fields"] == ["ticker", "name", "cik", "sector", "industry"] and DATA["as_of"]

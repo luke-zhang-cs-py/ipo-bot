@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 OUT = ROOT / "docs" / "app" / "nyse.json"
 CACHE = ROOT / "bench_data" / "nyse_sic.json"
+SEC_INTERVAL = 0.125       # seconds between request starts: 8 a second, under the SEC's fair-access limit of 10
 SECTORS = ["Technology", "Health Care", "Financials", "Real Estate", "Energy", "Materials", "Industrials",
            "Consumer Discretionary", "Consumer Staples", "Communication", "Utilities", "Other"]
 
@@ -72,45 +73,67 @@ def sic_of(cik, get, headers):
     return [code.group(1) if code else None, desc.group(1).strip() if desc else None]
 
 
+def look_up_all(ciks, lookup, cache, save=lambda: None, interval=SEC_INTERVAL, workers=6, retries=3, backoff=2.0):
+    """Fill cache[str(cik)] with lookup(cik) for each CIK, a few at a time, starting requests `interval` apart.
+
+    A CIK whose every try fails is returned in the failed list and left out of the cache, so the next run retries it.
+    save() is called every 100 lookups and at the end, so an interrupted run keeps its progress.
+    """
+    lock, gate = threading.Lock(), {"next": 0.0}
+
+    def one(cik):
+        for attempt in range(retries):
+            with lock:                   # requests start at least `interval` apart, across all threads
+                wait = gate["next"] - time.monotonic()
+                gate["next"] = max(gate["next"], time.monotonic()) + interval
+            if wait > 0:
+                time.sleep(wait)
+            try:
+                return cik, lookup(cik)
+            except Exception as e:       # a throttled or failed request: wait and try again
+                print(f"  CIK {cik}: {e}; retrying", flush=True)
+                time.sleep(backoff * (1 + attempt))
+        return cik, None
+
+    failed = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        for n, (cik, sic) in enumerate(pool.map(one, ciks), 1):
+            if sic is None:
+                failed.append(cik)
+            else:
+                cache[str(cik)] = sic
+            if n % 100 == 0 or n == len(ciks):
+                save()
+                print(f"  {n}/{len(ciks)}", flush=True)
+    return failed
+
+
+def rows_for(nyse, fields, cache):
+    """The published rows, sorted by ticker: [ticker, name, cik, sector, industry]."""
+    rows = []
+    for r in nyse:
+        sic, desc = cache.get(str(r[fields["cik"]]), [None, None])
+        rows.append([r[fields["ticker"]], r[fields["name"]], r[fields["cik"]], sic_sector(sic), industry(desc)])
+    return sorted(rows, key=lambda x: x[0])
+
+
 def main():
     import ipo_bot
     import tools
     ipo_bot.load_env()
     headers = tools._sec_headers()
     raw = json.loads(tools._get("https://www.sec.gov/files/company_tickers_exchange.json", headers))
-    i = {f: raw["fields"].index(f) for f in ("cik", "name", "ticker", "exchange")}
-    nyse = [r for r in raw["data"] if r[i["exchange"]] == "NYSE" and r[i["ticker"]]]
+    fields = {f: raw["fields"].index(f) for f in ("cik", "name", "ticker", "exchange")}
+    nyse = [r for r in raw["data"] if r[fields["exchange"]] == "NYSE" and r[fields["ticker"]]]
     cache = json.loads(CACHE.read_text(encoding="utf-8")) if CACHE.exists() else {}
-    todo = sorted({r[i["cik"]] for r in nyse} - {int(k) for k in cache})
-    print(f"{len(nyse)} NYSE tickers, {len({r[i['cik']] for r in nyse})} companies; {len(todo)} to look up")
+    todo = sorted({r[fields["cik"]] for r in nyse} - {int(k) for k in cache})
+    print(f"{len(nyse)} NYSE tickers, {len({r[fields['cik']] for r in nyse})} companies; {len(todo)} to look up")
     CACHE.parent.mkdir(exist_ok=True)
-    lock, gate = threading.Lock(), {"next": 0.0}
-
-    def look_up(cik):
-        for attempt in range(3):
-            with lock:                   # start at most 8 requests a second, under the SEC's limit of 10
-                wait = gate["next"] - time.monotonic()
-                gate["next"] = max(gate["next"], time.monotonic()) + 0.125
-            if wait > 0:
-                time.sleep(wait)
-            try:
-                return cik, sic_of(cik, tools._get, headers)
-            except Exception as e:       # a throttled or failed request: wait and try again
-                print(f"  CIK {cik}: {e}; retrying", flush=True)
-                time.sleep(2 + 3 * attempt)
-        return cik, [None, None]
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
-        for n, (cik, sic) in enumerate(pool.map(look_up, todo), 1):
-            cache[str(cik)] = sic
-            if n % 100 == 0 or n == len(todo):
-                CACHE.write_text(json.dumps(cache), encoding="utf-8")
-                print(f"  {n}/{len(todo)}", flush=True)
-    rows = []
-    for r in nyse:
-        sic, desc = cache.get(str(r[i["cik"]]), [None, None])
-        rows.append([r[i["ticker"]], r[i["name"]], r[i["cik"]], sic_sector(sic), industry(desc)])
-    rows.sort(key=lambda x: x[0])
+    failed = look_up_all(todo, lambda cik: sic_of(cik, tools._get, headers), cache,
+                         save=lambda: CACHE.write_text(json.dumps(cache), encoding="utf-8"))
+    if failed:
+        print(f"  {len(failed)} companies could not be looked up and have no sector this time; run again to retry them")
+    rows = rows_for(nyse, fields, cache)
     OUT.write_text(json.dumps({
         "source": "SEC company_tickers_exchange.json and EDGAR company headers (SIC); sector mapped from SIC",
         "as_of": dt.date.today().isoformat(), "fields": ["ticker", "name", "cik", "sector", "industry"], "rows": rows,

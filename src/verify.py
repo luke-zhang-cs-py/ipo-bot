@@ -172,7 +172,7 @@ def check(k):
             ", ".join(sorted(p for p in periods if p)) or "n/a")
 
     # A6: outliers must be flagged
-    rev, rev0, ni = _input(k, "revenue"), _input(k, "revenue_prior"), _input(k, "net_income")
+    rev, rev0 = _input(k, "revenue"), _input(k, "revenue_prior")
     if ev is not None and rev:
         if ev / rev > 50:
             add("EV/revenue above 50x is flagged", _flagged(k, "outlier"), f"{ev / rev:.1f}x")

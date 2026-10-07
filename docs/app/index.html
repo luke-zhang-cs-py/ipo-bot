@@ -358,6 +358,10 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
   clock(); setInterval(clock, 1000);
 
   // ---------- 01 projection
+  const OW = IpoCore.THRESHOLDS.overweight, UW = IpoCore.THRESHOLDS.underweight;
+  const signed = (v) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v) + "%";
+  // "Fill a template": a starting point from the price, not a view, and marked TEMPLATE on the page
+  const TEMPLATE = { bull: [1.40, 25], base: [1.08, 50], bear: [0.70, 25], stop: 0.85 };
   const C = { bull: css("--green"), base: css("--cyan"), bear: css("--red"), pwv: css("--amber"), ink: css("--ink"), muted: css("--muted"), faint: css("--faint"), line: css("--line"), white: css("--white") };
   const PRESETS = {
     memo: { tick: "EXM", sector: "Technology", price: 50, stop: 35, months: 12, conv: "Medium", vol: 35, bull: [80, 30], base: [62, 50], bear: [35, 20] },
@@ -382,6 +386,7 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
   const NS = "http://www.w3.org/2000/svg";
   const svg = (w, h, inner, label) => '<svg xmlns="' + NS + '" viewBox="0 0 ' + w + " " + h + '" width="' + w + '" height="' + h + '" role="img" aria-label="' + esc(label) + '">' + inner + "</svg>";
   function ticks(lo, hi, want) {
+    if (!(hi > lo) || !isFinite(hi - lo)) return isFinite(lo) ? [lo] : [];
     const raw = (hi - lo) / want, mag = Math.pow(10, Math.floor(Math.log10(raw))), step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
     const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(10)); return out;
   }
@@ -455,23 +460,25 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
   function gauge() {
     const el = $("gauge"), W = Math.max(280, el.clientWidth), H = 120, m = { l: 12, r: 12 }, pw = W - m.l - m.r, lo = -50, hi = 80;
     const X = (v) => m.l + pw * (Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo), y = 46, er = run.expected_return_pct;
-    let s = '<rect x="' + X(lo) + '" y="' + y + '" width="' + (X(-10) - X(lo)) + '" height="14" fill="' + C.bear + '" opacity=".35"/>' +
-      '<rect x="' + X(-10) + '" y="' + y + '" width="' + (X(15) - X(-10)) + '" height="14" fill="' + C.faint + '" opacity=".45"/>' +
-      '<rect x="' + X(15) + '" y="' + y + '" width="' + (X(hi) - X(15)) + '" height="14" fill="' + C.bull + '" opacity=".35"/>';
+    let s = '<rect x="' + X(lo) + '" y="' + y + '" width="' + (X(UW) - X(lo)) + '" height="14" fill="' + C.bear + '" opacity=".35"/>' +
+      '<rect x="' + X(UW) + '" y="' + y + '" width="' + (X(OW) - X(UW)) + '" height="14" fill="' + C.faint + '" opacity=".45"/>' +
+      '<rect x="' + X(OW) + '" y="' + y + '" width="' + (X(hi) - X(OW)) + '" height="14" fill="' + C.bull + '" opacity=".35"/>';
     for (let v = lo; v <= hi; v += 10) s += '<line x1="' + X(v) + '" x2="' + X(v) + '" y1="' + (y + 14) + '" y2="' + (y + (v % 50 ? 18 : 22)) + '" stroke="' + C.muted + '"/>';
-    for (const v of [-10, 15]) s += '<text x="' + X(v) + '" y="' + (y + 34) + '" text-anchor="middle" font-size="10" fill="' + C.muted + '">' + (v > 0 ? "+" : "") + v + "%</text>";
-    s += '<text x="' + X(-30) + '" y="' + (y - 8) + '" text-anchor="middle" font-size="9.5" fill="' + C.bear + '">UNDERWEIGHT</text><text x="' + X(2.5) + '" y="' + (y - 8) + '" text-anchor="middle" font-size="9.5" fill="' + C.muted + '">EQUAL-WEIGHT</text><text x="' + X(47) + '" y="' + (y - 8) + '" text-anchor="middle" font-size="9.5" fill="' + C.bull + '">OVERWEIGHT</text>';
+    for (const v of [UW, OW]) s += '<text x="' + X(v) + '" y="' + (y + 34) + '" text-anchor="middle" font-size="10" fill="' + C.muted + '">' + signed(v) + "</text>";
+    const zone = (a, b, name, col) => '<text x="' + X((a + b) / 2) + '" y="' + (y - 8) + '" text-anchor="middle" font-size="9.5" fill="' + col + '">' + name + "</text>";
+    s += zone(lo, UW, "UNDERWEIGHT", C.bear) + zone(UW, OW, "EQUAL-WEIGHT", C.muted) + zone(OW, hi, "OVERWEIGHT", C.bull);
     const x = X(er), col = run.rating === "Overweight" ? C.bull : run.rating === "Underweight" ? C.bear : C.white;
     s += '<path d="M' + x + "," + (y + 16) + "l-7,12h14z" + '" fill="' + col + '"/><line x1="' + x + '" x2="' + x + '" y1="' + (y - 2) + '" y2="' + (y + 16) + '" stroke="' + col + '" stroke-width="2"/>' +
       '<text x="' + Math.max(40, Math.min(W - 40, x)) + '" y="' + (y + 50) + '" text-anchor="middle" font-size="12" font-weight="800" fill="' + col + '">' + pct(er) + "</text>";
     el.innerHTML = svg(W, H, s, "Expected return " + pct(er) + ": " + run.rating);
     const conv = $("pj-conv").value;
     $("gauge-note").innerHTML = "Expected return " + pct(er) + " with " + conv.toLowerCase() + " conviction → <b>" + run.rating + "</b>." +
-      (er >= 15 && conv === "Low" ? " Low conviction caps it at Equal-weight." : "") + " Overweight needs +15% and medium or high conviction; Underweight is −10% or worse.";
+      (er >= OW && !IpoCore.THRESHOLDS.conviction_ok.includes(conv) ? " " + conv + " conviction caps it at Equal-weight." : "") +
+      " Overweight needs " + signed(OW) + " and " + IpoCore.THRESHOLDS.conviction_ok.join(" or ").toLowerCase() + " conviction; Underweight is " + signed(UW) + " or worse.";
   }
 
   function tiles() {
-    const er = run.expected_return_pct, cls = er >= 15 ? "up" : er <= -10 ? "dn" : "";
+    const er = run.expected_return_pct, cls = run.rating === "Overweight" ? "up" : run.rating === "Underweight" ? "dn" : "";
     const T = [["PWV", "$" + fmt(run.pwv), "hi"], ["Exp. return", pct(er), cls], ["Rating", run.rating.toUpperCase(), cls],
       ["80% of paths end", "$" + fmt(run.range80[0], 0) + "–" + fmt(run.range80[1], 0), ""],
       ["P(touch stop)", run.stop ? Math.round(100 * run.p_touch_stop) + "%" : "—", run.p_touch_stop > 0.3 ? "dn" : ""],
@@ -479,7 +486,7 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
     $("pj-tiles").innerHTML = T.map(([k, v, c]) => '<div class="tile"><span class="k">' + k + '</span><span class="v ' + c + '">' + v + "</span></div>").join("");
     $("pj-sub").textContent = run.months + "M · VOL " + run.vol + "% · SEED 1";
     const t = $("tick").textContent, items = [
-      [t + " LAST", "$" + fmt(run.price), ""], ["PWV", "$" + fmt(run.pwv), ""], ["E[R]", pct(er), er >= 0 ? "up" : "dn"], ["RATING", run.rating.toUpperCase(), cls],
+      [esc(t) + " LAST", "$" + fmt(run.price), ""], ["PWV", "$" + fmt(run.pwv), ""], ["E[R]", pct(er), er >= 0 ? "up" : "dn"], ["RATING", run.rating.toUpperCase(), cls],
       ["BULL", "$" + fmt(run.scenario.bull.at(-1)), "up"], ["BASE", "$" + fmt(run.scenario.base.at(-1)), ""], ["BEAR", "$" + fmt(run.scenario.bear.at(-1)), "dn"],
       ["P10–P90", "$" + fmt(run.range80[0]) + "–" + fmt(run.range80[1]), ""], ["STOP", run.stop ? "$" + fmt(run.stop) : "—", "dn"],
       ["P(TOUCH STOP)", run.stop ? Math.round(100 * run.p_touch_stop) + "%" : "—", ""], ["PATHS", "2,000", ""], ["API", "OFF", ""], ["CHECKS", "11 RULES", ""]];
@@ -562,13 +569,13 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
   });
   $("nyse-list").addEventListener("click", (e) => { const li = e.target.closest("li"); if (li) choose(shown[+li.dataset.i]); });
 
-  // A starting point, not a view: bull +40%, base +8%, bear -30% at 25/50/25, stop 15% below. Marked TEMPLATE until edited.
+  // TEMPLATE (above) fills the cases from the price; the mark comes off as soon as a case is edited.
   $("tpl-fill").addEventListener("click", () => {
     const price = n($("pj-price").value);
     if (!(price > 0)) { $("pj-price").focus(); return; }
     const r2 = (x) => Math.round(x * 100) / 100;
-    $("pj-bull-v").value = r2(price * 1.4); $("pj-bull-p").value = 25; $("pj-base-v").value = r2(price * 1.08); $("pj-base-p").value = 50;
-    $("pj-bear-v").value = r2(price * 0.7); $("pj-bear-p").value = 25; if (!(n($("pj-stop").value) > 0)) $("pj-stop").value = r2(price * 0.85);
+    for (const c of ["bull", "base", "bear"]) { $("pj-" + c + "-v").value = r2(price * TEMPLATE[c][0]); $("pj-" + c + "-p").value = TEMPLATE[c][1]; }
+    if (!(n($("pj-stop").value) > 0)) $("pj-stop").value = r2(price * TEMPLATE.stop);
     $("tpl").hidden = false; draw();
   });
   for (const id of ["pj-bull-v", "pj-bull-p", "pj-base-v", "pj-base-p", "pj-bear-v", "pj-bear-p"]) $(id).addEventListener("input", () => { $("tpl").hidden = true; });
@@ -579,12 +586,19 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
   const fromIdea = (i) => ({ tick: i.symbol, sector: i.sector, price: i.price, stop: i.stop ?? "", months: i.months, vol: i.vol, conv: i.conviction,
     bull: [i.bull.value, i.bull.prob], base: [i.base.value, i.base.prob], bear: [i.bear.value, i.bear.prob] });
   let ideas = Object.values(PRESETS).map(toIdea), sortKey = "expected_return_pct", sortDir = "best";
+  const metricsCache = new Map();
   $("cmp-sort").innerHTML = Object.entries(IpoCore.TRADE_SORTS).map(([k, v]) => '<option value="' + k + '">' + esc(v.label) + "</option>").join("");
   for (const th of document.querySelectorAll("#cmp th[data-sort] button")) th.dataset.label = th.textContent;
   function compare() {
     let view = null;
     try { view = IpoCore.valued(IpoCore.validate(readPortfolio())); } catch (e) { /* no sizing without a valid portfolio */ }
-    const rows = ideas.map((i) => { try { return IpoCore.tradeMetrics(i, view); } catch (e) { return null; } }).filter(Boolean);
+    const vkey = JSON.stringify(view && [view.equity, view.cash, view.holdings, view.rules]);
+    const rows = ideas.map((i) => {
+      const key = JSON.stringify(i) + vkey;
+      if (!metricsCache.has(key)) { try { metricsCache.set(key, IpoCore.tradeMetrics(i, view)); } catch (e) { metricsCache.set(key, null); } }
+      return metricsCache.get(key);
+    }).filter(Boolean);
+    if (metricsCache.size > 200) metricsCache.clear();      // old keys from edits; cheap to rebuild
     const sorted = IpoCore.sortTrades(rows, sortKey, sortDir), on = $("tick").textContent, best = IpoCore.TRADE_SORTS[sortKey].best;
     $("cmp-sort").value = sortKey;
     $("cmp-dir").textContent = sortDir === "best" ? "▼ Best first" : "▲ Worst first";

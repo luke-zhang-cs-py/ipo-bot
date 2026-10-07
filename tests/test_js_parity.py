@@ -125,6 +125,7 @@ process.stdin.on('data', (d) => input += d).on('end', () => {
   const job = JSON.parse(input);
   const out = {
     ratings: job.ratings.map(([er, conv]) => core.expectedRating(er, conv)),
+    thresholds: core.THRESHOLDS,
     runs: job.runs.map((o) => { try { return core.project(o); } catch (e) { return { error: e.message }; } }),
   };
   process.stdout.write(JSON.stringify(out));
@@ -142,8 +143,10 @@ def run_project(job):
 
 def test_the_charts_rate_by_the_bots_own_thresholds():
     grid = [[er, conv] for er in (-30, -10.01, -10, -9.99, 0, 14.99, 15, 15.01, 40) for conv in ("Low", "Medium", "High")]
-    got = run_project({"ratings": grid, "runs": []})["ratings"]
-    assert got == [verify.expected_rating(er, conv) for er, conv in grid]
+    out = run_project({"ratings": grid, "runs": []})
+    assert out["ratings"] == [verify.expected_rating(er, conv) for er, conv in grid]
+    t = out["thresholds"]                                   # the numbers the page draws its gauge and notes from
+    assert (t["overweight"], t["underweight"], set(t["conviction_ok"])) == (verify.OVERWEIGHT, verify.UNDERWEIGHT, verify.CONVICTION_OK)
 
 
 def test_the_projection_lands_on_the_scenarios_and_the_pwv():

@@ -309,6 +309,9 @@
     });
   }
 
-  const api = { PortfolioError, validate, valued, sizePosition, extract, check, checkMemo, expectedRating, project, tradeMetrics, sortTrades, TRADE_SORTS };
+  // The rating rule's numbers, for the page's gauge and notes: one source, the same as verify.py.
+  const THRESHOLDS = Object.freeze({ overweight: OVERWEIGHT, underweight: UNDERWEIGHT, conviction_ok: Object.freeze([...CONVICTION_OK]) });
+
+  const api = { PortfolioError, validate, valued, sizePosition, extract, check, checkMemo, expectedRating, project, tradeMetrics, sortTrades, TRADE_SORTS, THRESHOLDS };
   if (typeof module === "object" && module.exports) module.exports = api; else root.IpoCore = api;
 })(typeof self !== "undefined" ? self : this);
