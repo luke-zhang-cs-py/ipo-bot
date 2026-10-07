@@ -9,3 +9,5 @@ bench_runs/
 forecasts/
 testkit/runs/
 testkit/history.jsonl
+.coverage
+htmlcov/
