@@ -63,6 +63,42 @@ SIZES = [
 ]
 
 
+GUARDED = {**EXAMPLE, "day_pnl": -100.0, "rules": {**EXAMPLE["rules"], "max_daily_loss_pct": 2, "earnings_blackout_hours": 48, "max_volume_pct": 1}}
+GUARD_CASES = [
+    (GUARDED, ["DDD", 50, 45, "Medium", "Energy"], {"next_earnings": "2026-10-10", "avg_volume": 900_000, "now": "2026-10-07T12:00:00Z"}),
+    (GUARDED, ["DDD", 50, 45, "Medium", "Energy"], {"next_earnings": "2026-10-08T20:00:00Z", "avg_volume": 900_000, "now": "2026-10-07T12:00:00Z"}),
+    (GUARDED, ["DDD", 50, 45, "Medium", "Energy"], {"next_earnings": "2026-10-01", "avg_volume": 2_000, "now": "2026-10-07T12:00:00Z"}),
+    (GUARDED, ["DDD", 50, 45, "Medium", "Energy"], {}),
+    ({**GUARDED, "day_pnl": -400.0}, ["DDD", 50, 45, "Medium", "Energy"], {"next_earnings": "2026-12-01", "avg_volume": 900_000, "now": "2026-10-07"}),
+    ({**GUARDED, "day_pnl": 250.0}, ["DDD", 50, 45, "High", "Energy"], {"avg_volume": 600, "now": "2026-10-07"}),
+    ({**EXAMPLE, "rules": {**EXAMPLE["rules"], "max_order_value": 500}}, ["DDD", 50, 45, "High", "Energy"], {}),
+    ({**EXAMPLE, "rules": {**EXAMPLE["rules"], "max_gross_exposure_pct": 70}}, ["DDD", 50, 45, "High", "Energy"], {}),
+    ({**EXAMPLE, "equity_high": 20_000, "rules": {**EXAMPLE["rules"], "max_drawdown_pct": 8}}, ["DDD", 50, 45, "Medium", "Energy"], {}),
+    ({**EXAMPLE, "rules": {**EXAMPLE["rules"], "max_drawdown_pct": 8}}, ["DDD", 50, 45, "Medium", "Energy"], {}),
+    ({**EXAMPLE, "halted": True}, ["DDD", 50, 45, "Medium", "Energy"], {}),
+]
+GUARD_DRIVER = """
+const core = require(process.argv[1]);
+let input = '';
+process.stdin.on('data', (d) => input += d).on('end', () => {
+  const out = JSON.parse(input).map(([pf, args, opts]) => {
+    try { return core.sizePosition(core.valued(core.validate(pf)), ...args, opts); } catch (e) { return { error: e.message }; }
+  });
+  process.stdout.write(JSON.stringify(out));
+});
+"""
+
+
+def test_the_guardrails_match_the_python():
+    r = subprocess.run([NODE, "-e", GUARD_DRIVER, str(CORE)], input=json.dumps(GUARD_CASES), capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    for (pf, args, opts), got in zip(GUARD_CASES, json.loads(r.stdout)):
+        view = portfolio.valued(portfolio.validate(copy.deepcopy(pf)))
+        want = portfolio.size_position(view, *args, **opts)
+        for key in ("shares", "binding_rule", "limits_in_shares", "warnings"):
+            assert got[key] == want[key], (opts, key, got[key], want[key])
+
+
 def broken_blocks():
     def edit(fn):
         b = copy.deepcopy(BLOCK)

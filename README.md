@@ -30,7 +30,11 @@ question -> Claude + tools (SEC EDGAR, XBRL, FRED, market data, web, calculator)
 - **KEY NUMBERS:** every memo ends with a JSON block that `verify.py` recomputes: market cap, EV, multiples, the
   scenario maths and the rating thresholds. A second model call (`audit.py`) audits the memo against its sources.
 - **Portfolio mode:** with your holdings and rules loaded, it decides buy, add, hold, trim or sell, but the size comes
-  from the smallest of four limits in your own file: risk per trade, position cap, sector cap, cash floor.
+  from the smallest of the limits in your own file: risk per trade, position, sector and cash, plus optional guardrails
+  (order value, gross exposure, daily loss, drawdown, earnings blackout, volume, a kill switch).
+- **Execution and monitoring:** limit orders with partial fills worked safely, a monitor that stops on API failures,
+  stale quotes, wide spreads or a price that ran, and paper trading with a signal-to-execution report
+  ([`docs/BOT_SPEC.md`](docs/BOT_SPEC.md)).
 
 ## What the evaluation found
 
@@ -43,9 +47,12 @@ on 30 US large caps, 15 country ETFs and the 9 US sector ETFs, each seeing only 
 | 36 algorithm-universe-horizon tests, permutation p-values, false-discovery rate 10% | 4 pass a naive 5% bar; **0 of 36** survive |
 | Picked on 2009-2017, checked from 2018 | 1 of 5 held up |
 | 12-month 80% ranges | held the outcome only 70% to 77% of the time |
+| Chosen on 2018-2023, tested once from 2024 (recorded, not re-run) | 0 of 1 held up |
+| Five beginner bots (DCA, 60/40 rebalancing, trend, mean reversion, grid), 2005-2026, 0.30% a round trip | none beat holding SPY; trend is fragile (ahead only in 2005-2015) |
 
 Simple price signals give no 12-month edge that holds up, and ranges drawn from history are too narrow; both findings
-went back into the prompt. Details: [`evaluation/`](evaluation/).
+went back into the prompt. Every backtest fills at the next open, charges costs, and is re-run at 1.5x and 2x costs,
+with late fills, nudged parameters and by market regime. Details: [`evaluation/`](evaluation/).
 
 ## Run it
 
@@ -54,12 +61,15 @@ pip install -r requirements.txt
 python src/ipo_bot.py "Rate the <company> IPO"          # needs ANTHROPIC_API_KEY; data keys in .env.example
 python src/ipo_bot.py --portfolio portfolio.json         # review your holdings by your own rules
 python src/ipo_bot.py --audit "Rate <ticker>"            # plus a second-pass audit
+python src/paper.py run signals.json --portfolio portfolio.json [--alpaca]   # paper trading; then: report
+python evaluation/strategies.py                          # the five bots and their stress tests
+python evaluation/ipo_data.py && python evaluation/ipo_eval.py   # the IPO dataset (about an hour) and its checks
 ```
 
 ## Tests
 
 ```bash
-python -m pytest -q tests                  # 112 offline tests, free (9 need Node: the browser demo against the Python)
+python -m pytest -q tests                  # 162 offline tests, free (10 need Node: the browser demo against the Python)
 IPO_BOT_LIVE=1 python -m pytest -q tests/test_live_market.py   # 15 live checks on real SEC filings and prices
 python testkit/kit.py regress --yes        # the test kit, live: calculation cases, hallucination traps, a tools-off
                                            # stale-data test, rule tests; costs API credit
@@ -71,12 +81,12 @@ backtest that cuts the data tools off at the day before pricing.
 ## Layout
 
 ```
-src/          the bot (ipo_bot.py), its data tools, portfolio sizing, accuracy checks, verify, audit, forecast ledger
+src/          the bot (ipo_bot.py), data tools, portfolio sizing, checks, verify, audit, ledger, execution, monitor, paper
 prompts/      the system and auditor prompts
-evaluation/   benchmark, calibration, robustness, stress test
+evaluation/   benchmark, calibration, robustness, backtest suite, trading bots, IPO dataset and evaluation, stress test
 testkit/      the test kit (kit.py) and its cases
 tests/        the pytest suite
-docs/         the write-up and the browser demo (GitHub Pages)
+docs/         the write-up, the browser demo (GitHub Pages) and the trading spec
 scripts/      rebuilds the NYSE list from SEC data, re-records the demo GIF
 ```
 
@@ -84,5 +94,7 @@ scripts/      rebuilds the NYSE list from SEC data, re-records the demo GIF
 
 - No live run is recorded: every live test needs an API key and costs credit.
 - The stock universes are today's survivors, which flatters long-only results; the sector ETFs are the survivor-free check.
+  The IPO dataset has the same problem: Yahoo keeps no prices for delisted companies, so coverage is reported by year.
+- Paper trading needs a free Alpaca paper account; no forward test has been run yet.
 - Views on securities, not personal advice; every answer ends with that disclaimer. Before anyone else uses it, ask a
   securities lawyer about adviser registration (including Massachusetts) and your data licences.

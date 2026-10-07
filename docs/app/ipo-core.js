@@ -7,6 +7,9 @@
   const DEFAULT_RULES = { max_position_pct: 10.0, max_sector_pct: 30.0, risk_per_trade_pct: 1.0, min_cash_pct: 5.0,
     conviction_scale: { Low: 0.5, Medium: 1.0, High: 1.5 } };
 
+  const GUARDRAILS = { max_daily_loss_pct: 100, earnings_blackout_hours: 24 * 30, max_volume_pct: 100,   // each one's ceiling
+    max_order_value: 1e12, max_gross_exposure_pct: 100, max_drawdown_pct: 100 };
+
   class PortfolioError extends Error {}
 
   function num(v, what, minimum = 0, allowZero = true) {
@@ -22,6 +25,17 @@
       rules[k] = num(rules[k], "rules." + k);
       if (rules[k] > 100) throw new PortfolioError("rules." + k + " is a percentage: at most 100");
     }
+    for (const [k, ceiling] of Object.entries(GUARDRAILS)) {
+      if (rules[k] != null) {
+        rules[k] = num(rules[k], "rules." + k);
+        if (rules[k] > ceiling) throw new PortfolioError("rules." + k + " is at most " + ceiling);
+      }
+    }
+    const equityHigh = raw.equity_high == null ? null : num(raw.equity_high, "equity_high");
+    const halted = raw.halted === undefined ? false : raw.halted;
+    if (typeof halted !== "boolean") throw new PortfolioError("halted must be true or false");
+    const dayPnl = raw.day_pnl === undefined ? 0 : raw.day_pnl;
+    if (typeof dayPnl !== "number" || !isFinite(dayPnl)) throw new PortfolioError("day_pnl must be a number (negative for a loss)");
     const scale = {};
     for (const [k, v] of Object.entries(rules.conviction_scale || {})) scale[String(k)] = num(v, "conviction_scale." + k);
     rules.conviction_scale = scale;
@@ -35,7 +49,8 @@
         cost_basis: h.cost_basis == null ? null : num(h.cost_basis, sym + " cost_basis"), sector: String(h.sector || "Unknown"),
         price: h.price == null ? null : num(h.price, sym + " price", 0, false), price_date: String(h.price_date || raw.as_of || "") });
     });
-    return { as_of: String(raw.as_of || ""), cash: num(raw.cash === undefined ? 0 : raw.cash, "cash"), holdings, rules };
+    return { as_of: String(raw.as_of || ""), cash: num(raw.cash === undefined ? 0 : raw.cash, "cash"), holdings, rules, day_pnl: dayPnl,
+      equity_high: equityHigh, halted };
   }
 
   function valued(pf) {
@@ -63,12 +78,21 @@
     if (cashPct < rules.min_cash_pct - 1e-9) breaches.push({ rule: "min_cash_pct", cash_pct: round2(cashPct) });
     const sectorPct = {};
     for (const [s, v] of Object.entries(sectors)) sectorPct[s] = equity ? 100 * v / equity : 0;
-    return { as_of: pf.as_of, equity, cash: pf.cash, cash_pct: cashPct, holdings: rows, sector_pct: sectorPct, unpriced, rule_breaches: breaches, rules };
+    return { as_of: pf.as_of, equity, cash: pf.cash, cash_pct: cashPct, holdings: rows, sector_pct: sectorPct, unpriced, rule_breaches: breaches, rules,
+      day_pnl: pf.day_pnl || 0, equity_high: pf.equity_high == null ? null : pf.equity_high, halted: !!pf.halted, invested };
   }
 
   const round2 = (x) => Math.round(x * 100) / 100;
 
-  function sizePosition(view, symbol, entryPrice, stopPrice, conviction = "Medium", sector = null) {
+  // An ISO date or date-time in ms since the epoch; a bare date (or one with no zone) is read as UTC, as portfolio.py does.
+  function when(v, what) {
+    const s = String(v);
+    const t = Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(s) || !s.includes("T") ? s : s + "Z");
+    if (!isFinite(t)) throw new PortfolioError(what + " must be an ISO date or date-time");
+    return t;
+  }
+
+  function sizePosition(view, symbol, entryPrice, stopPrice, conviction = "Medium", sector = null, opts = {}) {
     const entry = num(entryPrice, "entry_price", 0, false), stop = num(stopPrice, "stop_price");
     if (stop >= entry) throw new PortfolioError("the stop-working price must be below the entry price for a purchase");
     const rules = view.rules, equity = view.equity, scale = rules.conviction_scale[String(conviction)];
@@ -83,13 +107,39 @@
       cash: Math.floor(Math.max(0, view.cash - equity * rules.min_cash_pct / 100) / entry),
     };
     if (sector !== "Unknown") limits.sector = Math.floor(Math.max(0, equity * rules.max_sector_pct / 100 - sectorValue) / entry);
+    const warnings = [];
+    if (rules.max_daily_loss_pct != null) {
+      const lost = -Math.min(0, view.day_pnl || 0);
+      if (equity && lost >= equity * rules.max_daily_loss_pct / 100 - 1e-9) limits.daily_loss = 0;
+    }
+    if (rules.earnings_blackout_hours != null) {
+      if (opts.next_earnings == null) warnings.push("earnings_blackout_hours is set but no earnings date was given: the blackout was not checked");
+      else {
+        const hours = (when(opts.next_earnings, "next_earnings") - (opts.now != null ? when(opts.now, "now") : Date.now())) / 3.6e6;
+        if (hours >= 0 && hours <= rules.earnings_blackout_hours) limits.earnings_blackout = 0;
+      }
+    }
+    if (rules.max_volume_pct != null) {
+      if (opts.avg_volume == null) warnings.push("max_volume_pct is set but no average volume was given: the order size was not checked against it");
+      else limits.liquidity = Math.floor(num(opts.avg_volume, "avg_volume") * rules.max_volume_pct / 100);
+    }
+    if (rules.max_order_value != null) limits.order_value = Math.floor(rules.max_order_value / entry);
+    if (rules.max_gross_exposure_pct != null) {
+      const invested = view.invested != null ? view.invested : view.holdings.reduce((a, h) => a + h.value, 0);
+      limits.exposure = Math.floor(Math.max(0, equity * rules.max_gross_exposure_pct / 100 - invested) / entry);
+    }
+    if (rules.max_drawdown_pct != null) {
+      if (view.equity_high == null) warnings.push("max_drawdown_pct is set but equity_high is not: the drawdown was not checked");
+      else if (equity <= view.equity_high * (1 - rules.max_drawdown_pct / 100) + 1e-9) limits.drawdown = 0;
+    }
+    if (view.halted) limits.kill_switch = 0;
     const shares = Math.max(0, Math.min(...Object.values(limits)));
     let binding = null;
     for (const k of Object.keys(limits)) if (binding === null || limits[k] < limits[binding]) binding = k;
     const cost = shares * entry, newValue = heldValue + cost;
     return { symbol: sym, shares, cost: round2(cost), entry_price: entry, stop_price: stop, conviction, binding_rule: binding,
       limits_in_shares: limits, risk_budget: round2(riskBudget), loss_at_stop: round2(shares * (entry - stop)),
-      weight_after_pct: equity ? round2(100 * newValue / equity) : 0, cash_after: round2(view.cash - cost) };
+      weight_after_pct: equity ? round2(100 * newValue / equity) : 0, cash_after: round2(view.cash - cost), warnings };
   }
 
   // ---------------------------------------------------------------- verify.py

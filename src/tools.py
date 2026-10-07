@@ -371,7 +371,9 @@ TOOL_DEFS = [
      "input_schema": _obj({"symbol": {"type": "string"}, "entry_price": {"type": "number"},
                            "stop_price": {"type": "number", "description": "The stop-working price; below the entry"},
                            "conviction": {"type": "string", "enum": ["Low", "Medium", "High"]},
-                           "sector": {"type": "string", "description": "For a stock not yet held, so the sector limit applies"}},
+                           "sector": {"type": "string", "description": "For a stock not yet held, so the sector limit applies"},
+                           "next_earnings": {"type": "string", "description": "The next earnings release, ISO date or date-time, for the earnings blackout"},
+                           "avg_volume": {"type": "number", "description": "Average daily volume in shares, for the volume cap"}},
                           ["symbol", "entry_price", "stop_price", "conviction"])},
     {"name": "record_forecast", "description": "Log a rating on a listed stock so it can be scored against simple algorithms when it matures. Call once per rated listed stock, after the rating is final, with the price the expected return was measured from.",
      "input_schema": _obj({"symbol": {"type": "string"}, "rating": {"type": "string", "enum": RATINGS},
@@ -427,11 +429,12 @@ def portfolio_view():
     return _result(f"portfolio file {pathlib.Path(PORTFOLIO['path']).name} (as of {view['as_of'] or 'undated'})", view, note)
 
 
-def portfolio_size(symbol, entry_price, stop_price, conviction, sector=None):
+def portfolio_size(symbol, entry_price, stop_price, conviction, sector=None, next_earnings=None, avg_volume=None):
     import portfolio
     view = _portfolio_view_data()
     try:
-        sized = portfolio.size_position(view, symbol, entry_price, stop_price, conviction, sector)
+        sized = portfolio.size_position(view, symbol, entry_price, stop_price, conviction, sector,
+                                        next_earnings=next_earnings, avg_volume=avg_volume)
     except portfolio.PortfolioError as e:
         raise ToolError(str(e)) from e
     return _result("portfolio_size: the user's rules applied to the portfolio file", sized)
