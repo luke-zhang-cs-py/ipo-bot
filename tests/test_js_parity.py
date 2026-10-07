@@ -179,3 +179,67 @@ def test_more_volatility_widens_the_bands_and_bad_input_is_refused():
     assert width(wild) > width(calm) and wild["p_touch_stop"] > calm["p_touch_stop"]
     assert [("error" in r) for r in bad] == [True] * 4
     assert "100%" in bad[0]["error"] and "bear < base < bull" in bad[1]["error"]
+
+
+# ----------------------------------------------------------------------------- sorting trade options (JS only)
+SORT = """
+const core = require(process.argv[1]);
+let input = '';
+process.stdin.on('data', (d) => input += d).on('end', () => {
+  const job = JSON.parse(input), view = core.valued(core.validate(job.portfolio));
+  const rows = job.ideas.map((i) => core.tradeMetrics(i, view));
+  const out = { rows: rows.map(({ idea, ...r }) => r), sorts: {} };
+  for (const key of Object.keys(core.TRADE_SORTS)) for (const dir of ['best', 'worst'])
+    out.sorts[key + ':' + dir] = core.sortTrades(rows, key, dir).map((r) => r.symbol);
+  try { core.sortTrades(rows, 'nonsense'); } catch (e) { out.bad = e.message; }
+  process.stdout.write(JSON.stringify(out));
+});
+"""
+IDEAS = [
+    {**SCEN, "symbol": "EXM", "sector": "Technology"},
+    {**SCEN, "symbol": "NEWCO", "sector": "Technology", "price": 28, "stop": 21, "vol": 75,
+     "bull": {"value": 52, "prob": 25}, "base": {"value": 31, "prob": 45}, "bear": {"value": 16, "prob": 30}},
+    {**SCEN, "symbol": "UTIL", "sector": "Utilities", "price": 64, "stop": 56, "vol": 18, "conviction": "High",
+     "bull": {"value": 74, "prob": 25}, "base": {"value": 68, "prob": 55}, "bear": {"value": 58, "prob": 20}},
+    {**SCEN, "symbol": "NOSTOP", "stop": None},
+]
+
+
+def run_sort():
+    r = subprocess.run([NODE, "-e", SORT, str(CORE)], input=json.dumps({"portfolio": EXAMPLE, "ideas": IDEAS}),
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout)
+
+
+def test_each_trade_option_is_projected_and_sized_by_the_same_rules():
+    out = run_sort()
+    rows = {r["symbol"]: r for r in out["rows"]}
+    view = portfolio.valued(portfolio.validate(copy.deepcopy(EXAMPLE)))
+    for idea in IDEAS[:3]:
+        r = rows[idea["symbol"]]
+        want = portfolio.size_position(copy.deepcopy(view), idea["symbol"], idea["price"], idea["stop"], idea["conviction"], idea["sector"])
+        assert r["shares"] == want["shares"] and abs(r["loss_at_stop"] - want["loss_at_stop"]) <= 0.011
+        pwv = verify.pwv({c: idea[c] for c in ("bull", "base", "bear")})
+        assert abs(r["reward_risk"] - (pwv - idea["price"]) / (idea["price"] - idea["stop"])) < 1e-9
+        assert r["rating"] == verify.expected_rating(100 * (pwv / idea["price"] - 1), idea["conviction"])
+    assert rows["NOSTOP"]["reward_risk"] is None and rows["NOSTOP"]["shares"] is None and rows["NOSTOP"]["p_touch_stop"] is None
+
+
+def test_trade_options_sort_best_first_with_blanks_last():
+    out = run_sort()
+    rows = {r["symbol"]: r for r in out["rows"]}
+    for key, best in (("expected_return_pct", "high"), ("reward_risk", "high"), ("p_end_above_price", "high"),
+                      ("p_touch_stop", "low"), ("shares", "high")):
+        for dir in ("best", "worst"):
+            order = out["sorts"][f"{key}:{dir}"]
+            have = [s for s in order if rows[s][key] is not None]
+            assert order[len(have):] == [s for s in order if rows[s][key] is None]          # blanks always last
+            values = [rows[s][key] for s in have]
+            high_first = (best == "high") == (dir == "best")
+            assert values == sorted(values, reverse=high_first), (key, dir, order)
+    assert out["sorts"]["symbol:best"] == sorted(rows)
+    rank = {"Overweight": 2, "Equal-weight": 1, "Underweight": 0}
+    by_rating = out["sorts"]["rating:best"]
+    assert [rank[rows[s]["rating"]] for s in by_rating] == sorted((rank[rows[s]["rating"]] for s in by_rating), reverse=True)
+    assert "unknown sort" in out["bad"]

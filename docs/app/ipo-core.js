@@ -270,6 +270,45 @@
     };
   }
 
-  const api = { PortfolioError, validate, valued, sizePosition, extract, check, checkMemo, expectedRating, project };
+  // ---------- comparing trade ideas: each projected (and sized, given a portfolio), then sorted by one measure
+  function tradeMetrics(idea, view = null) {
+    const r = project(idea), stop = r.stop, price = r.price;
+    const risk = stop !== null && stop < price ? price - stop : null;
+    let shares = null, loss = null;
+    if (view && stop !== null) {
+      try { const s = sizePosition(view, idea.symbol || "NEW", price, stop, idea.conviction ?? "Medium", idea.sector ?? null); shares = s.shares; loss = s.loss_at_stop; } catch (e) { /* no size for this idea */ }
+    }
+    return { symbol: idea.symbol || "NEW", price, stop, pwv: r.pwv, expected_return_pct: r.expected_return_pct, rating: r.rating,
+      reward_risk: risk === null ? null : (r.pwv - price) / risk, p_touch_stop: r.p_touch_stop, p_end_above_price: r.p_end_above_price,
+      range80: r.range80, shares, loss_at_stop: loss, idea };
+  }
+
+  // Each measure sorts best first by default; "dir" flips it. Ideas without a value (no stop, no size) always go last,
+  // and ties keep the symbol order, so the same list always sorts the same way.
+  const TRADE_SORTS = {
+    expected_return_pct: { label: "Expected return", best: "high" },
+    reward_risk: { label: "Reward : risk", best: "high" },
+    p_end_above_price: { label: "Chance it ends up", best: "high" },
+    p_touch_stop: { label: "Chance it hits the stop", best: "low" },
+    shares: { label: "Shares the rules allow", best: "high" },
+    rating: { label: "Rating", best: "high" },
+    symbol: { label: "Symbol", best: "low" },
+  };
+  const RATING_RANK = { Overweight: 2, "Equal-weight": 1, Underweight: 0 };
+  function sortTrades(rows, key, dir = "best") {
+    if (!TRADE_SORTS[key]) throw new Error("unknown sort: " + key);
+    const value = (r) => key === "rating" ? RATING_RANK[r.rating] ?? null : r[key];
+    let sign = TRADE_SORTS[key].best === "high" ? -1 : 1;
+    if (dir === "worst") sign = -sign;
+    return rows.slice().sort((a, b) => {
+      const x = value(a), y = value(b);
+      if (x === null || x === undefined) return (y === null || y === undefined) ? a.symbol.localeCompare(b.symbol) : 1;
+      if (y === null || y === undefined) return -1;
+      if (x !== y) return typeof x === "string" ? sign * x.localeCompare(y) : sign * (x - y);
+      return key === "rating" ? b.expected_return_pct - a.expected_return_pct || a.symbol.localeCompare(b.symbol) : a.symbol.localeCompare(b.symbol);
+    });
+  }
+
+  const api = { PortfolioError, validate, valued, sizePosition, extract, check, checkMemo, expectedRating, project, tradeMetrics, sortTrades, TRADE_SORTS };
   if (typeof module === "object" && module.exports) module.exports = api; else root.IpoCore = api;
 })(typeof self !== "undefined" ? self : this);

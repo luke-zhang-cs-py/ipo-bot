@@ -136,6 +136,19 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
 .checks small { grid-column: 2; color: var(--amber); }
 .score { font: 800 1rem var(--mono); margin-bottom: 10px; letter-spacing: .02em; }
 
+.cmp-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin: 0 0 10px; }
+.cmp-bar label { flex: 0 1 220px; }
+#cmp th button { all: unset; cursor: pointer; font: inherit; color: inherit; letter-spacing: inherit; }
+#cmp th button:hover, #cmp th[aria-sort] button { color: var(--cyan); }
+#cmp th button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+#cmp td.num, #cmp th.num { text-align: right; }
+#cmp tbody tr { cursor: pointer; }
+#cmp tbody tr:hover td { background: var(--panel-2); }
+#cmp tbody tr.on td { background: rgba(34, 211, 238, .08); }
+#cmp tbody tr.on td:first-child { box-shadow: inset 2px 0 0 var(--cyan); }
+#cmp .rank { color: var(--faint); font-weight: 800; }
+#cmp .x { all: unset; cursor: pointer; color: var(--faint); padding: 0 4px; }
+#cmp .x:hover { color: var(--red); }
 .foot { margin-top: 22px; color: var(--faint); font: .72rem var(--mono); letter-spacing: .04em; }
 @media (prefers-reduced-motion: reduce) { .cursor, .tape .run { animation: none; } }
 @media (max-width: 560px) { .grid2 { grid-template-columns: minmax(0, 1fr); } .chips { margin-left: 0; } }
@@ -219,6 +232,23 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
           <p class="note" id="gauge-note"></p>
         </div>
       </div>
+      <div class="card">
+        <div class="ph"><h2><i>01.5</i>Trade options</h2><small id="cmp-sub"></small></div>
+        <div class="cmp-bar">
+          <label>Sort by <select id="cmp-sort"></select></label>
+          <button class="btn" id="cmp-dir" aria-pressed="false">▼ Best first</button>
+          <button class="btn go" id="cmp-add">+ Add the chart above</button>
+        </div>
+        <div class="tablewrap"><table id="cmp">
+          <thead><tr><th>#</th><th data-sort="symbol"><button>Symbol</button></th><th class="num">Price</th><th class="num">PWV</th>
+            <th class="num" data-sort="expected_return_pct"><button>Exp. ret</button></th><th data-sort="rating"><button>Rating</button></th>
+            <th class="num" data-sort="reward_risk"><button>Rew:risk</button></th><th class="num" data-sort="p_touch_stop"><button>P(stop)</button></th>
+            <th class="num" data-sort="p_end_above_price"><button>P(up)</button></th><th class="num" data-sort="shares"><button>Shares</button></th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <p class="note">Every idea is projected the same way and sized by the portfolio and rules in tab 02. Reward : risk is the PWV's gain over the
+          loss at the stop-working price. Click a row to chart it; click a heading to sort by it.</p>
+      </div>
       <p class="note" style="margin:0">The benchmark found that 80% ranges drawn from price history held the outcome only 70–77% of the time,
         so treat these bands as the memo's view, not a guarantee. Example figures, not a real company.</p>
     </div>
@@ -300,12 +330,13 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
   // ---------- 01 projection
   const C = { bull: css("--green"), base: css("--cyan"), bear: css("--red"), pwv: css("--amber"), ink: css("--ink"), muted: css("--muted"), faint: css("--faint"), line: css("--line"), white: css("--white") };
   const PRESETS = {
-    memo: { tick: "EXM", price: 50, stop: 35, months: 12, conv: "Medium", vol: 35, bull: [80, 30], base: [62, 50], bear: [35, 20] },
-    ipo: { tick: "NEWCO", price: 28, stop: 21, months: 12, conv: "Medium", vol: 75, bull: [52, 25], base: [31, 45], bear: [16, 30] },
-    def: { tick: "UTIL", price: 64, stop: 56, months: 12, conv: "High", vol: 18, bull: [74, 25], base: [68, 55], bear: [58, 20] },
+    memo: { tick: "EXM", sector: "Technology", price: 50, stop: 35, months: 12, conv: "Medium", vol: 35, bull: [80, 30], base: [62, 50], bear: [35, 20] },
+    ipo: { tick: "NEWCO", sector: "Technology", price: 28, stop: 21, months: 12, conv: "Medium", vol: 75, bull: [52, 25], base: [31, 45], bear: [16, 30] },
+    def: { tick: "UTIL", sector: "Utilities", price: 64, stop: 56, months: 12, conv: "High", vol: 18, bull: [74, 25], base: [68, 55], bear: [58, 20] },
   };
+  let sector = null;
   function preset(p) {
-    $("tick").textContent = p.tick; $("pj-price").value = p.price; $("pj-stop").value = p.stop; $("pj-months").value = p.months; $("pj-conv").value = p.conv; $("pj-vol").value = p.vol;
+    $("tick").textContent = p.tick; sector = p.sector ?? null; $("pj-price").value = p.price; $("pj-stop").value = p.stop; $("pj-months").value = p.months; $("pj-conv").value = p.conv; $("pj-vol").value = p.vol;
     for (const c of ["bull", "base", "bear"]) { $("pj-" + c + "-v").value = p[c][0]; $("pj-" + c + "-p").value = p[c][1]; }
     draw();
   }
@@ -432,11 +463,62 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
       catch (e) { run = null; $("fan").innerHTML = '<p class="err">✗ ' + esc(e.message) + "</p>"; $("hist").innerHTML = $("gauge").innerHTML = $("pj-tiles").innerHTML = ""; $("gauge-note").textContent = ""; return; }
       tiles();                         // the ticker follows the numbers even while another tab is open
       if ($("p-proj").hidden) return;
-      fan(); hist(); gauge();
+      fan(); hist(); gauge(); compare();
     });
   }
   $("p-proj").addEventListener("input", draw);
   $("p-proj").addEventListener("change", draw);
+  // ---------- 01.5 trade options: every idea projected and sized, sorted by one measure
+  const toIdea = (p) => ({ symbol: p.tick, sector: p.sector ?? null, price: p.price, stop: p.stop, months: p.months, vol: p.vol, conviction: p.conv,
+    bull: { value: p.bull[0], prob: p.bull[1] }, base: { value: p.base[0], prob: p.base[1] }, bear: { value: p.bear[0], prob: p.bear[1] } });
+  const fromIdea = (i) => ({ tick: i.symbol, sector: i.sector, price: i.price, stop: i.stop ?? "", months: i.months, vol: i.vol, conv: i.conviction,
+    bull: [i.bull.value, i.bull.prob], base: [i.base.value, i.base.prob], bear: [i.bear.value, i.bear.prob] });
+  let ideas = Object.values(PRESETS).map(toIdea), sortKey = "expected_return_pct", sortDir = "best";
+  $("cmp-sort").innerHTML = Object.entries(IpoCore.TRADE_SORTS).map(([k, v]) => '<option value="' + k + '">' + esc(v.label) + "</option>").join("");
+  for (const th of document.querySelectorAll("#cmp th[data-sort] button")) th.dataset.label = th.textContent;
+  function compare() {
+    let view = null;
+    try { view = IpoCore.valued(IpoCore.validate(readPortfolio())); } catch (e) { /* no sizing without a valid portfolio */ }
+    const rows = ideas.map((i) => { try { return IpoCore.tradeMetrics(i, view); } catch (e) { return null; } }).filter(Boolean);
+    const sorted = IpoCore.sortTrades(rows, sortKey, sortDir), on = $("tick").textContent, best = IpoCore.TRADE_SORTS[sortKey].best;
+    $("cmp-sort").value = sortKey;
+    $("cmp-dir").textContent = sortDir === "best" ? "▼ Best first" : "▲ Worst first";
+    $("cmp-dir").setAttribute("aria-pressed", sortDir === "worst" ? "true" : "false");
+    for (const th of document.querySelectorAll("#cmp th[data-sort]")) {
+      const b = th.querySelector("button"), here = th.dataset.sort === sortKey;
+      if (here) th.setAttribute("aria-sort", (best === "high") === (sortDir === "best") ? "descending" : "ascending"); else th.removeAttribute("aria-sort");
+      b.textContent = b.dataset.label + (here ? (sortDir === "best" ? " ▼" : " ▲") : "");
+    }
+    const cls = (r) => r === "Overweight" ? "c-bull" : r === "Underweight" ? "c-bear" : "";
+    $("cmp").tBodies[0].innerHTML = sorted.map((r, i) => '<tr data-sym="' + esc(r.symbol) + '"' + (r.symbol === on ? ' class="on"' : "") + '><td class="rank">' + String(i + 1).padStart(2, "0") +
+      "</td><td><b>" + esc(r.symbol) + '</b></td><td class="num">$' + fmt(r.price) + '</td><td class="num">$' + fmt(r.pwv) +
+      '</td><td class="num ' + (r.expected_return_pct >= 0 ? "c-bull" : "c-bear") + '">' + pct(r.expected_return_pct) + '</td><td class="' + cls(r.rating) + '">' + r.rating.toUpperCase() +
+      '</td><td class="num">' + (r.reward_risk === null ? "—" : fmt(r.reward_risk, 2) + "×") + '</td><td class="num">' + (r.p_touch_stop === null ? "—" : Math.round(100 * r.p_touch_stop) + "%") +
+      '</td><td class="num">' + Math.round(100 * r.p_end_above_price) + '%</td><td class="num">' + (r.shares === null ? "—" : r.shares) +
+      '</td><td><button class="x" data-del="' + esc(r.symbol) + '" aria-label="Remove ' + esc(r.symbol) + '">×</button></td></tr>').join("");
+    $("cmp-sub").textContent = sorted.length + " ideas · by " + IpoCore.TRADE_SORTS[sortKey].label.toLowerCase();
+  }
+  $("cmp-sort").addEventListener("change", () => { sortKey = $("cmp-sort").value; sortDir = "best"; compare(); });
+  $("cmp-dir").addEventListener("click", () => { sortDir = sortDir === "best" ? "worst" : "best"; compare(); });
+  for (const th of document.querySelectorAll("#cmp th[data-sort]")) th.querySelector("button").addEventListener("click", () => {
+    if (sortKey === th.dataset.sort) sortDir = sortDir === "best" ? "worst" : "best"; else { sortKey = th.dataset.sort; sortDir = "best"; }
+    compare();
+  });
+  $("cmp-add").addEventListener("click", () => {
+    const o = readProjection(), sym = ($("tick").textContent || "NEW").trim();
+    try { IpoCore.project(o); } catch (e) { return; }
+    const idea = { ...o, symbol: sym, sector };
+    const at = ideas.findIndex((i) => i.symbol === sym);
+    if (at >= 0) ideas[at] = idea; else ideas.push(idea);
+    compare();
+  });
+  $("cmp").tBodies[0].addEventListener("click", (e) => {
+    const del = e.target.closest("[data-del]");
+    if (del) { if (ideas.length > 1) ideas = ideas.filter((i) => i.symbol !== del.dataset.del); compare(); return; }
+    const tr = e.target.closest("tr"); if (!tr) return;
+    const idea = ideas.find((i) => i.symbol === tr.dataset.sym); if (idea) preset(fromIdea(idea));
+  });
+
   new ResizeObserver(() => { if (run && !$("p-proj").hidden) { fan(); hist(); gauge(); } }).observe($("fan"));
 
   // ---------- 02 sizing
@@ -487,6 +569,7 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
     } catch (e) { br.innerHTML = ""; out.innerHTML = '<p class="err">✗ ' + esc(e.message) + "</p>"; }
   }
   $("p-size").addEventListener("input", size);
+  $("p-size").addEventListener("change", () => { if (!$("p-proj").hidden) compare(); });
   size();
 
   $("to-size").addEventListener("click", () => {
