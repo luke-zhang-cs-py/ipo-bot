@@ -11,7 +11,7 @@ import datetime as dt
 import pathlib
 import sys
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 import tools  # noqa: E402
 from checks import check  # noqa: E402
 from ipo_bot import BOSTON, Bot  # noqa: E402

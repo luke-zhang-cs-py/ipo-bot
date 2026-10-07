@@ -1,7 +1,7 @@
 """Check a memo's KEY NUMBERS block: the maths, the scenario rules, sources, dates and flags.
 
-    python verify.py memos/2026-10-06_101500.md      check one saved memo
-    python verify.py memo.md --json                   the results as JSON
+    python src/verify.py memos/2026-10-06_101500.md      check one saved memo
+    python src/verify.py memo.md --json                   the results as JSON
 
 The block is the JSON the system prompt asks for at the end of every full assessment (ACCURACY CHECKS 11).
 Every check prints PASS or FAIL with the numbers it compared. Exit code 1 if anything fails.

@@ -440,7 +440,7 @@ def portfolio_size(symbol, entry_price, stop_price, conviction, sector=None):
 # ----------------------------------------------------------------------------- forecast ledger
 
 # Each rating is logged so evaluation/benchmark.py --ledger can score it against simple algorithms once it matures.
-LEDGER = pathlib.Path(__file__).resolve().parent / "forecasts" / "ledger.jsonl"
+LEDGER = pathlib.Path(__file__).resolve().parents[1] / "forecasts" / "ledger.jsonl"
 
 
 def record_forecast(symbol, rating, expected_return_pct, price, price_date, horizon_months=12,

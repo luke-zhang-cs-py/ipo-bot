@@ -1,7 +1,7 @@
 """Live tracking: score the bot's logged recommendations once they mature.
 
-    python track.py                 score forecasts/ledger.jsonl
-    python track.py other.jsonl     score another log in the same format
+    python src/track.py                 score forecasts/ledger.jsonl
+    python src/track.py other.jsonl     score another log in the same format
 
 The log (written by the bot's record_forecast tool, one JSON object per line):
     date, symbol, rating, conviction, expected_return_pct, price, price_date, horizon_months,
@@ -30,7 +30,7 @@ try:
 except ImportError:
     pass
 
-HERE = pathlib.Path(__file__).resolve().parent
+HERE = pathlib.Path(__file__).resolve().parents[1]   # the repo root: .env, prompts/, memos/ and forecasts/ live there
 LEDGER = HERE / "forecasts" / "ledger.jsonl"
 BENCHMARK = "SPY"
 EQUAL_BAND = 10.0           # an Equal-weight call is right if it ends within this many points of the index

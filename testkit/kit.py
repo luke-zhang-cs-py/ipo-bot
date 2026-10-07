@@ -1,21 +1,21 @@
 """The test kit. Every command that calls the model costs API credit and needs --yes.
 
 Free, offline:
-    python kit.py calc                    calculation cases: the formulas against exact expected outputs
-    python kit.py verify <memo.md>        check a memo's KEY NUMBERS block (same as verify.py)
-    python kit.py track                   score the bot's matured recommendations (same as track.py)
-    python kit.py find-ipos 2026-07-01 2026-09-30   list first-time IPOs from SEC prospectuses for the backtest
+    python testkit/kit.py calc                    calculation cases: the formulas against exact expected outputs
+    python testkit/kit.py verify <memo.md>        check a memo's KEY NUMBERS block (same as verify.py)
+    python testkit/kit.py track                   score the bot's matured recommendations (same as track.py)
+    python testkit/kit.py find-ipos 2026-07-01 2026-09-30   list first-time IPOs from SEC prospectuses for the backtest
 
 Live (the bot answers; add --audit to have the second-pass auditor check every answer too):
-    python kit.py calc --live --yes       the bot does the calculation cases
-    python kit.py golden --yes            the golden set (testkit/golden_set.json, entries you have filled in)
-    python kit.py traps --yes             hallucination traps: the only passing answer is "can't find it"
-    python kit.py stale --yes             tools off: the bot must not give a current price or rate
-    python kit.py rules --yes             hype, inside information, guarantees, pump posts, personal amounts
-    python kit.py consistency --yes       the same question repeated and reworded: ratings and numbers must match
-    python kit.py backtest --yes          IPOs as of the day before pricing, scored on 1, 6 and 12-month prices
-    python kit.py audit <memo.md> [--sources s.json] --yes
-    python kit.py regress --yes [--with-consistency] [--audit]
+    python testkit/kit.py calc --live --yes       the bot does the calculation cases
+    python testkit/kit.py golden --yes            the golden set (testkit/golden_set.json, entries you have filled in)
+    python testkit/kit.py traps --yes             hallucination traps: the only passing answer is "can't find it"
+    python testkit/kit.py stale --yes             tools off: the bot must not give a current price or rate
+    python testkit/kit.py rules --yes             hype, inside information, guarantees, pump posts, personal amounts
+    python testkit/kit.py consistency --yes       the same question repeated and reworded: ratings and numbers must match
+    python testkit/kit.py backtest --yes          IPOs as of the day before pricing, scored on 1, 6 and 12-month prices
+    python testkit/kit.py audit <memo.md> [--sources s.json] --yes
+    python testkit/kit.py regress --yes [--with-consistency] [--audit]
                                           calc, traps, stale, rules and golden in one run; scores appended to
                                           testkit/history.jsonl with the prompt's fingerprint, compared with last time
 
@@ -29,10 +29,11 @@ import re
 import statistics
 import sys
 
-import checks
-import verify
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))   # the bot's modules
+import checks  # noqa: E402
+import verify  # noqa: E402
 
-HERE = pathlib.Path(__file__).resolve().parent
+HERE = pathlib.Path(__file__).resolve().parents[1]   # the repo root
 KIT = HERE / "testkit"
 RUNS = KIT / "runs"
 HISTORY = KIT / "history.jsonl"
@@ -409,7 +410,7 @@ def backtest(runner, allow_hindsight=False):
     import track
     path = KIT / "backtest_ipos.json"
     if not path.exists():
-        sys.exit("No testkit/backtest_ipos.json yet: run  python kit.py find-ipos <start> <end>  first.")
+        sys.exit("No testkit/backtest_ipos.json yet: run  python testkit/kit.py find-ipos <start> <end>  first.")
     entries = json.loads(path.read_text(encoding="utf-8"))["entries"]
     today = dt.date.today()
     items, rows = [], []

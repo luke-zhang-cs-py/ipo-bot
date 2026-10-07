@@ -33,7 +33,7 @@ question -> Claude + tools (SEC EDGAR, XBRL, FRED, market data, web, calculator)
 ## What the evaluation found
 
 The model knows how past years turned out, so it is scored forward: each rating is logged with its price and
-scenarios (`track.py`). To give it a bar to clear, seven simple prediction algorithms were tested every month from 2009
+scenarios (`src/track.py`). To give it a bar to clear, seven simple prediction algorithms were tested every month from 2009
 on 30 US large caps, 15 country ETFs and the 9 US sector ETFs, each seeing only the prices known that day.
 
 | Test | Result |
@@ -49,9 +49,9 @@ went back into the prompt. Details: [`evaluation/`](evaluation/).
 
 ```bash
 pip install -r requirements.txt
-python ipo_bot.py "Rate the <company> IPO"              # needs ANTHROPIC_API_KEY; data keys in .env.example
-python ipo_bot.py --portfolio portfolio.json             # review your holdings by your own rules
-python ipo_bot.py --audit "Rate <ticker>"                # plus a second-pass audit
+python src/ipo_bot.py "Rate the <company> IPO"          # needs ANTHROPIC_API_KEY; data keys in .env.example
+python src/ipo_bot.py --portfolio portfolio.json         # review your holdings by your own rules
+python src/ipo_bot.py --audit "Rate <ticker>"            # plus a second-pass audit
 ```
 
 ## Tests
@@ -59,23 +59,23 @@ python ipo_bot.py --audit "Rate <ticker>"                # plus a second-pass au
 ```bash
 python -m pytest -q tests                  # 100 offline tests, free (3 need Node: the browser demo against the Python)
 IPO_BOT_LIVE=1 python -m pytest -q tests/test_live_market.py   # 15 live checks on real SEC filings and prices
-python kit.py regress --yes                # the test kit, live: calculation cases, hallucination traps, a tools-off
+python testkit/kit.py regress --yes        # the test kit, live: calculation cases, hallucination traps, a tools-off
                                            # stale-data test, rule tests; costs API credit
 ```
 
-The test kit (`kit.py`, `testkit/`) also has a golden-set template, a consistency test, and a no-hindsight IPO
+The test kit (`testkit/`) also has a golden-set template, a consistency test, and a no-hindsight IPO
 backtest that cuts the data tools off at the day before pricing.
 
 ## Layout
 
 ```
-ipo_bot.py  tools.py  portfolio.py   the bot, its data tools, portfolio sizing
-checks.py  verify.py  audit.py       accuracy checks, KEY NUMBERS recompute, second-pass audit
-kit.py  track.py                     the test kit and the forecast ledger
-prompts/                             the system and auditor prompts
-evaluation/                          benchmark, calibration, robustness, stress test
-testkit/  tests/                     test-kit cases and the pytest suite
-docs/                                the write-up and the browser demo (GitHub Pages)
+src/          the bot (ipo_bot.py), its data tools, portfolio sizing, accuracy checks, verify, audit, forecast ledger
+prompts/      the system and auditor prompts
+evaluation/   benchmark, calibration, robustness, stress test
+testkit/      the test kit (kit.py) and its cases
+tests/        the pytest suite
+docs/         the write-up and the browser demo (GitHub Pages)
+scripts/      re-records the demo GIF
 ```
 
 ## Limits

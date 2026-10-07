@@ -8,7 +8,7 @@ import pathlib
 import sys
 from types import SimpleNamespace as NS
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 import checks  # noqa: E402
 import ipo_bot  # noqa: E402

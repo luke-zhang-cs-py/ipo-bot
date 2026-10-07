@@ -1,10 +1,10 @@
 """IPO and market research bot: Claude with web search and data tools, answering with a one-page memo.
 
-    python ipo_bot.py "Rate the <company> IPO"      one question, memo printed and saved to memos/
-    python ipo_bot.py                                interactive: ask follow-ups in one conversation
-    python ipo_bot.py --portfolio portfolio.json     review your holdings: buy/add/hold/trim/sell, sized by your rules
-    python ipo_bot.py --portfolio portfolio.json "Should I buy <ticker>?"
-    python ipo_bot.py --audit "Rate <ticker>"        also run the second-pass auditor on the answer (one more call)
+    python src/ipo_bot.py "Rate the <company> IPO"      one question, memo printed and saved to memos/
+    python src/ipo_bot.py                                interactive: ask follow-ups in one conversation
+    python src/ipo_bot.py --portfolio portfolio.json     review your holdings: buy/add/hold/trim/sell, sized by your rules
+    python src/ipo_bot.py --portfolio portfolio.json "Should I buy <ticker>?"
+    python src/ipo_bot.py --audit "Rate <ticker>"        also run the second-pass auditor on the answer (one more call)
 
 Needs ANTHROPIC_API_KEY (or an `ant auth login` profile). Data tools use SEC_USER_AGENT, FRED_API_KEY and
 FMP_API_KEY when set; without them the bot says which data is missing instead of guessing.
@@ -25,7 +25,7 @@ try:
 except ImportError:
     pass
 
-HERE = pathlib.Path(__file__).resolve().parent
+HERE = pathlib.Path(__file__).resolve().parents[1]   # the repo root: .env, prompts/, memos/ and forecasts/ live there
 
 
 def load_env(path=HERE / ".env"):

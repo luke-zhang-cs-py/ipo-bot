@@ -1,7 +1,7 @@
 """Second-pass auditor: a separate model call checks a memo against the accuracy rules and its sources.
 
-    python audit.py memos/<memo>.md                      audit a saved memo (no sources: rules A1-A11 on the text)
-    python audit.py memos/<memo>.md --sources src.json   with the tool results it was written from
+    python src/audit.py memos/<memo>.md                      audit a saved memo (no sources: rules A1-A11 on the text)
+    python src/audit.py memos/<memo>.md --sources src.json   with the tool results it was written from
 
 From code: audit(memo, bot.sources) after bot.ask(question). Returns
     {"verdict": "pass" | "fail", "checks": [{"id": "A1", "result": "pass|fail|not_applicable", "reason": "..."}],
@@ -18,7 +18,7 @@ import anthropic
 import ipo_bot
 import verify
 
-HERE = pathlib.Path(__file__).resolve().parent
+HERE = pathlib.Path(__file__).resolve().parents[1]   # the repo root: .env, prompts/, memos/ and forecasts/ live there
 AUDITOR = (HERE / "prompts" / "auditor_prompt.md").read_text(encoding="utf-8")
 RULES = [f"A{n}" for n in range(1, 12)]
 SOURCES_CHARS = 120_000

@@ -1,6 +1,6 @@
 """Re-record docs/demo.gif from docs/app/: sizing as the stop moves, then the memo checks catching two errors.
 
-    python tools_dev/record_demo.py
+    python scripts/record_demo.py
 """
 import io
 import pathlib

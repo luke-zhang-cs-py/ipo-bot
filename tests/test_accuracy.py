@@ -10,7 +10,8 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "testkit"))
 
 import audit  # noqa: E402
 import checks  # noqa: E402
