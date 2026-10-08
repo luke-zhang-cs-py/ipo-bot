@@ -149,6 +149,9 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
 #cmp .rank { color: var(--faint); font-weight: 800; }
 #cmp .x { all: unset; cursor: pointer; color: var(--faint); padding: 0 4px; }
 #cmp .x:hover { color: var(--red); }
+#cmp .pick { all: unset; cursor: pointer; font-weight: 700; }
+#cmp .pick:hover { color: var(--cyan); }
+#cmp .pick:focus-visible, #cmp .x:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .nyse-tools { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .nyse-tools label:first-child { grid-column: 1 / -1; }
 .picks { list-style: none; margin: 10px 0 0; padding: 0; max-height: 300px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; }
@@ -191,10 +194,10 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
         purchase by your own rules, and check a memo's numbers. Same rules as the Python, tested against it. Nothing you type leaves the page.
         <a href="../">Write-up</a> · <a href="https://github.com/luke-zhang-cs-py/ipo-bot">Source</a></p>
     </div>
-    <div class="tabs" role="tablist">
+    <div class="tabs" role="tablist" aria-label="Tools">
       <button role="tab" id="t-proj" aria-selected="true" aria-controls="p-proj"><i>01</i>Project</button>
-      <button role="tab" id="t-size" aria-selected="false" aria-controls="p-size"><i>02</i>Size a trade</button>
-      <button role="tab" id="t-check" aria-selected="false" aria-controls="p-check"><i>03</i>Check a memo</button>
+      <button role="tab" id="t-size" aria-selected="false" aria-controls="p-size" tabindex="-1"><i>02</i>Size a trade</button>
+      <button role="tab" id="t-check" aria-selected="false" aria-controls="p-check" tabindex="-1"><i>03</i>Check a memo</button>
     </div>
   </div>
 
@@ -277,7 +280,7 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
           <tbody></tbody>
         </table></div>
         <p class="note">Every idea is projected the same way and sized by the portfolio and rules in tab 02. Reward : risk is the PWV's gain over the
-          loss at the stop-working price. Click a row to chart it; click a heading to sort by it.</p>
+          loss at the stop-working price. Click a row (or its symbol) to chart it; click a heading to sort by it.</p>
       </div>
       <p class="note" style="margin:0">The benchmark found that 80% ranges drawn from price history held the outcome only 70–77% of the time,
         so treat these bands as the memo's view, not a guarantee. Example figures, not a real company.</p>
@@ -350,10 +353,18 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
 
   // ---------- tabs and clock
   function show(id) {
-    for (const u of document.querySelectorAll('[role="tab"]')) { const on = u.id === id; u.setAttribute("aria-selected", on ? "true" : "false"); $(u.getAttribute("aria-controls")).hidden = !on; }
+    for (const u of document.querySelectorAll('[role="tab"]')) { const on = u.id === id; u.setAttribute("aria-selected", on ? "true" : "false"); u.tabIndex = on ? 0 : -1; $(u.getAttribute("aria-controls")).hidden = !on; }
     if (id === "t-proj") draw();
   }
-  for (const t of document.querySelectorAll('[role="tab"]')) t.addEventListener("click", () => show(t.id));
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  for (const t of tabs) t.addEventListener("click", () => show(t.id));
+  document.querySelector('[role="tablist"]').addEventListener("keydown", (e) => {
+    const at = tabs.indexOf(document.activeElement); if (at < 0) return;
+    const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 }[e.key];
+    if (to === undefined) return;
+    e.preventDefault();
+    const t = tabs[(to + tabs.length) % tabs.length]; t.focus(); show(t.id);
+  });
   const clock = () => { $("clock").textContent = new Date().toLocaleTimeString("en-CA", { hour12: false }); };
   clock(); setInterval(clock, 1000);
 
@@ -368,7 +379,7 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
     ipo: { tick: "NEWCO", sector: "Technology", price: 28, stop: 21, months: 12, conv: "Medium", vol: 75, bull: [52, 25], base: [31, 45], bear: [16, 30] },
     def: { tick: "UTIL", sector: "Utilities", price: 64, stop: 56, months: 12, conv: "High", vol: 18, bull: [74, 25], base: [68, 55], bear: [58, 20] },
   };
-  let sector = null;
+  let sector = PRESETS.memo.sector;      // the page opens on the example memo's figures
   function preset(p) {
     $("tick").textContent = p.tick; sector = p.sector ?? null;
     $("tpl").hidden = !p.template; if (!p.company) $("picked").hidden = true; $("pj-price").value = p.price; $("pj-stop").value = p.stop; $("pj-months").value = p.months; $("pj-conv").value = p.conv; $("pj-vol").value = p.vol;
@@ -503,10 +514,11 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
       $("pj-sum").textContent = "Σ PROB " + fmt(total, 0) + "%" + (Math.abs(total - 100) < 0.01 ? " ✓" : " — must be 100%");
       $("pj-sum").classList.toggle("bad", Math.abs(total - 100) >= 0.01);
       $("pj-vol-out").textContent = o.vol + "% a year";
+      hover = null;                    // an index into the old run's months; a new horizon has other ones
       try { run = IpoCore.project(o); }
       catch (e) {
         run = null;
-        $("fan").innerHTML = !(o.price > 0) ? '<p class="prompt">Enter <b>' + esc($("tick").textContent) + "</b>'s price, then your bull, base and bear cases,<br>or fill a template from the price.</p>"
+        $("fan").innerHTML = o.price === undefined ? '<p class="prompt">Enter <b>' + esc($("tick").textContent) + "</b>'s price, then your bull, base and bear cases,<br>or fill a template from the price.</p>"
           : '<p class="err">✗ ' + esc(e.message) + "</p>"; $("hist").innerHTML = $("gauge").innerHTML = $("pj-tiles").innerHTML = ""; $("gauge-note").textContent = ""; return; }
       tiles();                         // the ticker follows the numbers even while another tab is open
       if ($("p-proj").hidden) return;
@@ -573,7 +585,7 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
   $("tpl-fill").addEventListener("click", () => {
     const price = n($("pj-price").value);
     if (!(price > 0)) { $("pj-price").focus(); return; }
-    const r2 = (x) => Math.round(x * 100) / 100;
+    const r2 = IpoCore.round2;
     for (const c of ["bull", "base", "bear"]) { $("pj-" + c + "-v").value = r2(price * TEMPLATE[c][0]); $("pj-" + c + "-p").value = TEMPLATE[c][1]; }
     if (!(n($("pj-stop").value) > 0)) $("pj-stop").value = r2(price * TEMPLATE.stop);
     $("tpl").hidden = false; draw();
@@ -587,6 +599,7 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
     bull: [i.bull.value, i.bull.prob], base: [i.base.value, i.base.prob], bear: [i.bear.value, i.bear.prob] });
   let ideas = Object.values(PRESETS).map(toIdea), sortKey = "expected_return_pct", sortDir = "best";
   const metricsCache = new Map();
+  let refocus = null;                 // the row button a keyboard chose: the table is redrawn, so focus goes back to it
   $("cmp-sort").innerHTML = Object.entries(IpoCore.TRADE_SORTS).map(([k, v]) => '<option value="' + k + '">' + esc(v.label) + "</option>").join("");
   for (const th of document.querySelectorAll("#cmp th[data-sort] button")) th.dataset.label = th.textContent;
   function compare() {
@@ -610,12 +623,13 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
     }
     const cls = (r) => r === "Overweight" ? "c-bull" : r === "Underweight" ? "c-bear" : "";
     $("cmp").tBodies[0].innerHTML = sorted.map((r, i) => '<tr data-sym="' + esc(r.symbol) + '"' + (r.symbol === on ? ' class="on"' : "") + '><td class="rank">' + String(i + 1).padStart(2, "0") +
-      "</td><td><b>" + esc(r.symbol) + '</b></td><td class="num">$' + fmt(r.price) + '</td><td class="num">$' + fmt(r.pwv) +
+      "</td><td>" + '<button class="pick" data-pick="' + esc(r.symbol) + '" aria-label="Chart ' + esc(r.symbol) + '">' + esc(r.symbol) + '</button></td><td class="num">$' + fmt(r.price) + '</td><td class="num">$' + fmt(r.pwv) +
       '</td><td class="num ' + (r.expected_return_pct >= 0 ? "c-bull" : "c-bear") + '">' + pct(r.expected_return_pct) + '</td><td class="' + cls(r.rating) + '">' + r.rating.toUpperCase() +
       '</td><td class="num">' + (r.reward_risk === null ? "—" : fmt(r.reward_risk, 2) + "×") + '</td><td class="num">' + (r.p_touch_stop === null ? "—" : Math.round(100 * r.p_touch_stop) + "%") +
       '</td><td class="num">' + Math.round(100 * r.p_end_above_price) + '%</td><td class="num">' + (r.shares === null ? "—" : r.shares) +
       '</td><td><button class="x" data-del="' + esc(r.symbol) + '" aria-label="Remove ' + esc(r.symbol) + '">×</button></td></tr>').join("");
     $("cmp-sub").textContent = sorted.length + " ideas · by " + IpoCore.TRADE_SORTS[sortKey].label.toLowerCase();
+    if (refocus !== null) { const b = [...$("cmp").querySelectorAll("[data-pick]")].find((x) => x.dataset.pick === refocus); refocus = null; if (b) b.focus(); }
   }
   $("cmp-sort").addEventListener("change", () => { sortKey = $("cmp-sort").value; sortDir = "best"; compare(); });
   $("cmp-dir").addEventListener("click", () => { sortDir = sortDir === "best" ? "worst" : "best"; compare(); });
@@ -635,6 +649,7 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
     const del = e.target.closest("[data-del]");
     if (del) { if (ideas.length > 1) ideas = ideas.filter((i) => i.symbol !== del.dataset.del); compare(); return; }
     const tr = e.target.closest("tr"); if (!tr) return;
+    if (e.target.closest("[data-pick]")) refocus = tr.dataset.sym;
     const idea = ideas.find((i) => i.symbol === tr.dataset.sym); if (idea) preset(fromIdea(idea));
   });
 
@@ -688,11 +703,11 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
     } catch (e) { br.innerHTML = ""; out.innerHTML = '<p class="err">✗ ' + esc(e.message) + "</p>"; }
   }
   $("p-size").addEventListener("input", size);
-  $("p-size").addEventListener("change", () => { if (!$("p-proj").hidden) compare(); });
   size();
 
   $("to-size").addEventListener("click", () => {
     $("sym").value = $("tick").textContent; $("entry").value = $("pj-price").value; $("stop").value = $("pj-stop").value; $("conv").value = $("pj-conv").value;
+    $("sector").value = sector ?? "";
     size(); show("t-size");
   });
 
@@ -737,14 +752,15 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
       const k = IpoCore.extract(memoText()), sc = k.scenarios || {};
       const price = sc.reference_price ?? (k.inputs && k.inputs.price && k.inputs.price.value);
       if (!price || !sc.bull || !sc.base || !sc.bear) throw new Error("the block needs a reference price and bull, base and bear cases");
-      preset({ tick: (k.subject && k.subject.ticker) || "MEMO", price, stop: k.stop_working_price ?? "", months: 12, conv: k.conviction || "Medium", vol: Number($("pj-vol").value),
+      preset({ tick: (k.subject && k.subject.ticker) || "MEMO", price, stop: k.stop_working_price ?? "", months: 12, conv: { low: "Low", medium: "Medium", high: "High" }[String(k.conviction || "").trim().toLowerCase()] || "Medium", vol: Number($("pj-vol").value),
         bull: [sc.bull.value, sc.bull.prob], base: [sc.base.value, sc.base.prob], bear: [sc.bear.value, sc.bear.prob] });
       show("t-proj");
     } catch (e) { $("to-proj-err").textContent = "✗ " + e.message; }
   });
 
   load(location.hash === "#check" ? "rating" : "good");
-  if (location.hash === "#check") show("t-check"); else if (location.hash === "#size") show("t-size"); else draw();
+  draw();                               // the ticker tape, whichever tab opens first
+  if (location.hash === "#check") show("t-check"); else if (location.hash === "#size") show("t-size");
 })();
 </script>
 </body>

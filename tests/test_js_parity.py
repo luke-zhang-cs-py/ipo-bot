@@ -60,6 +60,8 @@ SIZES = [
     (EXAMPLE, ["EEE", 10, 9.9, "High", "Technology"]), ({**EXAMPLE, "cash": 600}, ["DDD", 50, 49.9, "High", "Energy"]),
     (EXAMPLE, ["DDD", 50, 55, "Medium", None]), (EXAMPLE, ["DDD", 50, 45, "Certain", None]),
     (EXAMPLE, ["BBB", 55, 44, "Medium", None]), ({**EXAMPLE, "cash": 0}, ["ZZZ", 12.5, 10, "High", "Health"]),
+    (EXAMPLE, ["DDD", 50, 45, "toString", None]), (EXAMPLE, ["DDD", 50, 45, "Medium", "constructor"]),
+    ({**EXAMPLE, "holdings": EXAMPLE["holdings"] + [{"symbol": "UNP", "shares": 5, "sector": "Energy"}]}, ["unp", 50, 45, "Medium", None]),
 ]
 
 
@@ -121,6 +123,22 @@ def broken_blocks():
     yield edit(lambda k: k.update(rating="NOT RATED", scenarios=None))
     yield edit(lambda k: k.update(ipo_ratings={"at_offer": "Participate", "aftermarket": "Buy below", "buy_below": 62 / 1.15}))
     yield edit(lambda k: (k["inputs"]["revenue"].update(value=100_000_000), k["outputs"]["multiples"][0].update(value=55.0)))
+    # scenario numbers go through Python's float(): null, "" and lists fail one check; numeric strings and booleans convert
+    for bad in (None, "", [], {}, "80", " 8e1 ", True, "eighty"):
+        yield edit(lambda k, bad=bad: k["scenarios"]["bull"].update(value=bad))
+    yield edit(lambda k: k["scenarios"]["base"].pop("prob"))
+    yield edit(lambda k: k["scenarios"].update(bear=35))
+    # a badly shaped block is a list of failed checks, never a crash
+    yield edit(lambda k: (k["inputs"]["price"].update(as_of="2026-10-01"), k.update(flags="stale")))
+    yield edit(lambda k: (k["inputs"]["price"].update(as_of="2026-10-01"), k.update(flags=[{"note": "stale price"}])))
+    yield edit(lambda k: k["outputs"].update(multiples={}))
+    yield edit(lambda k: k["outputs"].update(multiples=["EV/Revenue", {"name": None, "numerator": "toString", "denominator": "revenue"}]))
+    yield edit(lambda k: k.update(inputs=[1, 2]))
+    yield edit(lambda k: k.update(outputs="none"))
+    yield edit(lambda k: k.update(segments=[{"total": "revenue", "parts": "ab"}, "x"]))
+    yield edit(lambda k: k.update(scenarios=[1, 2, 3]))
+    yield edit(lambda k: k.update(ipo_ratings=["Participate"]))
+    yield edit(lambda k: k.update(rating="NOT RATED", scenarios={}))
 
 
 def test_sizing_matches_the_python_to_the_cent():
@@ -146,7 +164,8 @@ def test_portfolio_values_and_breaches_match():
 
 
 def test_every_memo_check_matches_the_python():
-    memos = [memo_with(b) for b in broken_blocks()] + ["no block here", "```json\n{oops\n```"]
+    memos = [memo_with(b) for b in broken_blocks()] + ["no block here", "```json\n{oops\n```",
+             memo_with(BLOCK) + "\n```json\n{oops\n```"]          # a stray invalid snippet does not hide the real block
     js = run_js({"sizes": [], "views": [], "memos": memos})["memos"]
     for memo, got in zip(memos, js):
         want = [[name, ok] for name, ok, _ in verify.check_memo(memo)]

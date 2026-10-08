@@ -59,7 +59,7 @@
       if (h.price == null) { unpriced.push(h.symbol); continue; }
       rows.push(Object.assign({}, h, { price_source: "portfolio file, " + (h.price_date || "undated"), value: h.shares * h.price }));
     }
-    const invested = rows.reduce((a, r) => a + r.value, 0), equity = invested + pf.cash, sectors = {};
+    const invested = rows.reduce((a, r) => a + r.value, 0), equity = invested + pf.cash, sectors = Object.create(null);
     for (const r of rows) {
       r.weight_pct = equity ? 100 * r.value / equity : 0;
       if (r.cost_basis) r.gain_pct = Math.round(100 * 100 * (r.price / r.cost_basis - 1)) / 100;
@@ -95,11 +95,13 @@
   function sizePosition(view, symbol, entryPrice, stopPrice, conviction = "Medium", sector = null, opts = {}) {
     const entry = num(entryPrice, "entry_price", 0, false), stop = num(stopPrice, "stop_price");
     if (stop >= entry) throw new PortfolioError("the stop-working price must be below the entry price for a purchase");
-    const rules = view.rules, equity = view.equity, scale = rules.conviction_scale[String(conviction)];
+    const rules = view.rules, equity = view.equity, scale = Object.hasOwn(rules.conviction_scale, String(conviction)) ? rules.conviction_scale[String(conviction)] : undefined;
     if (scale === undefined) throw new PortfolioError("conviction must be one of " + Object.keys(rules.conviction_scale).sort().join(", "));
-    const sym = String(symbol).trim().toUpperCase(), held = view.holdings.find((h) => h.symbol === sym) || null;
+    const sym = String(symbol).trim().toUpperCase();
+    if ((view.unpriced || []).includes(sym)) throw new PortfolioError(sym + " is held but has no price: its position and sector limits cannot be checked");
+    const held = view.holdings.find((h) => h.symbol === sym) || null;
     sector = sector || (held ? held.sector : "Unknown");
-    const heldValue = held ? held.value : 0, sectorValue = (view.sector_pct[sector] || 0) * equity / 100;
+    const heldValue = held ? held.value : 0, sectorValue = (Object.hasOwn(view.sector_pct, sector) ? view.sector_pct[sector] : 0) * equity / 100;
     const riskBudget = equity * rules.risk_per_trade_pct / 100 * scale;
     const limits = {
       risk: Math.floor(riskBudget / (entry - stop)),
@@ -148,26 +150,49 @@
 
   function extract(memo) {
     const blocks = [...String(memo).matchAll(/```json\s*([\s\S]*?)```/gi)].map((m) => m[1]);
-    for (const raw of blocks.reverse()) {
+    let bad = null;
+    for (const raw of blocks.reverse()) {           // an invalid block (an example, a stray snippet) does not hide a valid one
       let data;
-      try { data = JSON.parse(raw); } catch (e) { throw new Error("the KEY NUMBERS block is not valid JSON"); }
-      if (data && typeof data === "object" && data.key_numbers && typeof data.key_numbers === "object") return data.key_numbers;
+      try { data = JSON.parse(raw); } catch (e) { bad = bad || e; continue; }
+      if (isDict(data) && isDict(data.key_numbers)) return data.key_numbers;
     }
+    if (bad) throw new Error("the KEY NUMBERS block is not valid JSON (" + bad.message + ")");
     throw new Error('no ```json block with a "key_numbers" object');
   }
   const isNum = (x) => typeof x === "number" && isFinite(x);
+  // The block is written by a model, so any shape can arrive: a wrong shape is a failed check, read the way the Python reads it.
+  const isDict = (x) => !!x && typeof x === "object" && !Array.isArray(x);
+  const truthy = (x) => Array.isArray(x) || typeof x === "string" ? x.length > 0 : isDict(x) ? Object.keys(x).length > 0 : !!x;
+  const list = (x) => Array.isArray(x) ? x : typeof x === "string" ? [...x] : isDict(x) ? Object.keys(x) : [];    // what Python iterates
+  const pyStr = (x) => typeof x === "string" ? x : x == null ? "None" : typeof x === "boolean" ? (x ? "True" : "False") : typeof x === "object" ? JSON.stringify(x) : String(x);
+  const pyType = (x) => Array.isArray(x) ? "list" : typeof x === "string" ? "str" : typeof x === "number" ? (Number.isInteger(x) ? "int" : "float") : typeof x === "boolean" ? "bool" : "dict";
+  const DIGITS = "\\d(?:_?\\d)*", FLOAT = new RegExp("^[+-]?(?:" + DIGITS + "(?:\\.(?:" + DIGITS + ")?)?|\\." + DIGITS + ")(?:[eE][+-]?" + DIGITS + ")?$");
+  function pyFloat(x) {                         // Python's float(): a number or a numeric string; null, "", lists and objects raise
+    if (typeof x === "number") return x;
+    if (typeof x === "boolean") return +x;      // float(True) is 1.0
+    if (typeof x === "string") {
+      const s = x.trim();
+      if (/^[+-]?(inf|infinity)$/i.test(s)) return s[0] === "-" ? -Infinity : Infinity;
+      if (/^[+-]?nan$/i.test(s)) return NaN;
+      if (FLOAT.test(s)) return Number(s.replace(/_/g, ""));
+    }
+    throw new TypeError("not a number: " + pyStr(x));
+  }
   const close = (a, b, rel = REL_TOL, abs = 1e-9) => a != null && b != null && Math.abs(a - b) <= Math.max(rel * Math.max(Math.abs(a), Math.abs(b)), abs);
   const date = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || "")); if (!m) return null; const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])); return d.getUTCMonth() === +m[2] - 1 ? d : null; };
   function tradingDays(a, b) { let n = 0; for (let d = new Date(a.getTime() + 864e5); d <= b; d = new Date(d.getTime() + 864e5)) if (d.getUTCDay() % 6) n++; return n; }
 
   function check(k) {
     const out = [], add = (name, ok, detail = "") => out.push([name, !!ok, detail]);
-    const inputs = k.inputs || {}, outputs = k.outputs || {}, unknown = new Set(k.unknown || []), sources = k.sources || [];
+    const rawIn = truthy(k.inputs) ? k.inputs : {}, rawOut = truthy(k.outputs) ? k.outputs : {};
+    add("inputs is an object", isDict(rawIn), pyType(rawIn));
+    add("outputs is an object", isDict(rawOut), pyType(rawOut));
+    const inputs = isDict(rawIn) ? rawIn : {}, outputs = isDict(rawOut) ? rawOut : {}, unknown = new Set(list(k.unknown));
     const asOf = date(k.as_of);
     add("as_of date present", asOf !== null);
     const subj = k.subject || {};
     add("identity: company, ticker, exchange and share class given", ["company", "ticker", "exchange", "share_class"].every((f) => String(subj[f] || "").trim()));
-    const input = (n) => (inputs[n] && typeof inputs[n] === "object" && isNum(inputs[n].value)) ? inputs[n].value : null;
+    const input = (n) => (Object.hasOwn(inputs, n) && isDict(inputs[n]) && isNum(inputs[n].value)) ? inputs[n].value : null;
     for (const [name, v] of Object.entries(inputs)) {
       if (!v || typeof v !== "object" || Array.isArray(v)) { add("input " + name + " is an object", false); continue; }
       if (v.value == null) { add(name + ": missing value is listed in unknown", unknown.has(name)); continue; }
@@ -175,9 +200,9 @@
       add(name + ": has a source", !!String(v.source || "").trim());
       add(name + ": has an as-of date", date(v.as_of) !== null);
     }
-    add("sources are listed", sources.length > 0);
-    const flagged = (...words) => { const t = (k.flags || []).join(" ").toLowerCase(); return words.every((w) => t.includes(w.toLowerCase())); };
-    const p = inputs.price && typeof inputs.price === "object" ? inputs.price : null;
+    add("sources are listed", truthy(k.sources));
+    const flagged = (...words) => { const t = list(k.flags).map(pyStr).join(" ").toLowerCase(); return words.every((w) => t.includes(w.toLowerCase())); };
+    const p = isDict(inputs.price) ? inputs.price : null;
     if (p && date(p.as_of) && asOf && (p.basis || "last close") !== "offer midpoint") {
       const lag = tradingDays(date(p.as_of), asOf);
       if (lag > 1) add("stale price is flagged", flagged("stale"), "price is " + lag + " trading days old");
@@ -189,20 +214,23 @@
     if (mc !== null && debt !== null && cash !== null) add("EV = market cap + debt + preferred + minority interest - cash", close(ev, mc + debt + (input("preferred") || 0) + (input("minority_interest") || 0) - cash));
     else if (ev !== null) add("EV has its inputs", false);
     const values = Object.assign({}, ...Object.keys(inputs).map((n) => ({ [n]: input(n) })), { market_cap: mc, enterprise_value: ev });
-    for (const m of outputs.multiples || []) {
-      const n = values[m.numerator], d = values[m.denominator], val = isNum(m.value) ? m.value : null;
-      if (n == null || d == null || d === 0) add("multiple " + m.name + ": inputs present", false);
-      else add("multiple " + m.name + " recomputes", close(val, n / d, 0.01));
+    const look = (x) => typeof x === "string" && Object.hasOwn(values, x) ? values[x] : null;
+    const allMultiples = list(outputs.multiples), multiples = allMultiples.filter(isDict);
+    add("every multiple is an object", multiples.length === allMultiples.length);
+    for (const m of multiples) {
+      const n = look(m.numerator), d = look(m.denominator), val = isNum(m.value) ? m.value : null;
+      if (n == null || d == null || d === 0) add("multiple " + pyStr(m.name) + ": inputs present", false);
+      else add("multiple " + pyStr(m.name) + " recomputes", close(val, n / d, 0.01));
     }
-    for (const seg of k.segments || []) {
-      const total = values[seg.total], parts = (seg.parts || []).map((x) => isNum(x.value) ? x.value : null);
-      if (total != null && parts.length && !parts.includes(null)) add("segments add up to " + seg.total, close(parts.reduce((a, b) => a + b, 0), total, 0.01));
+    for (const seg of list(k.segments).filter(isDict)) {
+      const total = look(seg.total), parts = list(seg.parts).map((x) => isDict(x) && isNum(x.value) ? x.value : null);
+      if (total != null && parts.length && !parts.includes(null)) add("segments add up to " + pyStr(seg.total), close(parts.reduce((a, b) => a + b, 0), total, 0.01));
     }
-    for (const m of outputs.multiples || []) {
-      const periods = [m.numerator, m.denominator].filter((x) => inputs[x] && typeof inputs[x] === "object").map((x) => String(inputs[x].period || ""));
+    for (const m of multiples) {
+      const periods = [m.numerator, m.denominator].filter((x) => typeof x === "string" && Object.hasOwn(inputs, x) && isDict(inputs[x])).map((x) => String(inputs[x].period || ""));
       const kinds = new Set();
       for (const per of periods.concat([String(m.name || "")])) for (const w of ["LTM", "NTM", "FY"]) if (new RegExp("\\b" + w).test(per.toUpperCase())) kinds.add(w);
-      add("multiple " + m.name + ": one kind of period", kinds.size <= 1);
+      add("multiple " + pyStr(m.name) + ": one kind of period", kinds.size <= 1);
     }
     const rev = input("revenue"), rev0 = input("revenue_prior");
     if (ev !== null && rev && ev / rev > 50) add("EV/revenue above 50x is flagged", flagged("outlier"));
@@ -213,30 +241,33 @@
     }
     const scen = k.scenarios, rating = k.rating;
     add("rating is one of the four", RATINGS.has(rating));
-    if (rating === "NOT RATED") add("NOT RATED has no scenarios", !scen);
-    else if (scen && typeof scen === "object") {
+    if (rating === "NOT RATED") add("NOT RATED has no scenarios", !truthy(scen));
+    else if (isDict(scen)) {
       const cases = ["bull", "base", "bear"];
-      if (!cases.every((c) => scen[c] && isNum(+scen[c].value) && isNum(+scen[c].prob))) add("scenarios have bull, base and bear values and probabilities", false);
+      const field = (c, f) => { if (!isDict(scen[c]) || !Object.hasOwn(scen[c], f)) throw new TypeError(c + "." + f + " missing"); return pyFloat(scen[c][f]); };
+      let vals = null, probs = null;
+      try { vals = Object.fromEntries(cases.map((c) => [c, field(c, "value")])); probs = Object.fromEntries(cases.map((c) => [c, field(c, "prob")])); }
+      catch (e) { vals = null; }
+      if (vals === null) add("scenarios have bull, base and bear values and probabilities", false, JSON.stringify(scen).slice(0, 200));
       else {
-        const vals = Object.fromEntries(cases.map((c) => [c, +scen[c].value])), probs = Object.fromEntries(cases.map((c) => [c, +scen[c].prob]));
         const sum = probs.bull + probs.base + probs.bear;
         add("probabilities add up to 100%", Math.abs(sum - 100) < 0.01);
         add("probabilities in 5% steps", cases.every((c) => Math.abs(probs[c] / 5 - Math.round(probs[c] / 5)) < 1e-9));
         add("bear < base < bull", vals.bear < vals.base && vals.base < vals.bull);
         const want = cases.reduce((a, c) => a + vals[c] * probs[c] / 100, 0);
-        add("PWV matches the probabilities and values", close(isNum(scen.pwv) ? scen.pwv : null, want));
+        add("PWV matches the probabilities and values", close(isNum(scen.pwv) ? scen.pwv : null, want));   // from the checked numbers, not the raw text
         const ref = isNum(scen.reference_price) ? scen.reference_price : null, er = isNum(scen.expected_return_pct) ? scen.expected_return_pct : null;
         if (ref) {
           add("expected return = PWV / reference price - 1", er !== null && Math.abs(er - 100 * (want / ref - 1)) < 0.5);
           for (const c of cases) if (vals[c] > 5 * ref || vals[c] < ref / 5) add(c + " value beyond 5x / one-fifth of the price is flagged", flagged("outlier"));
         }
         if (er !== null) {
-          const wantR = er >= OVERWEIGHT && CONVICTION_OK.has(k.conviction) ? "Overweight" : er <= UNDERWEIGHT ? "Underweight" : "Equal-weight";
+          const wantR = expectedRating(er, k.conviction);
           add("rating follows the thresholds", rating === wantR, "expected return " + er + "%, conviction " + k.conviction + " -> " + wantR + "; block says " + rating);
           add("no positive rating with an expected loss", !(er < 0 && rating === "Overweight"));
         }
         const ipo = k.ipo_ratings;
-        if (ipo && typeof ipo === "object") {
+        if (isDict(ipo)) {
           add("Participate only with an Overweight rating", (ipo.at_offer === "Participate") === (rating === "Overweight"));
           if (ipo.aftermarket === "Buy below") add("buy-below = PWV / 1.15", close(isNum(ipo.buy_below) ? ipo.buy_below : null, want / 1.15, 0.01));
         }
@@ -251,16 +282,18 @@
   function checkMemo(memo) {
     let k;
     try { k = extract(memo); } catch (e) { return [["KEY NUMBERS block present and valid", false, e.message]]; }
-    return [["KEY NUMBERS block present and valid", true, ""]].concat(check(k));
+    const head = [["KEY NUMBERS block present and valid", true, ""]];
+    try { return head.concat(check(k)); }
+    catch (e) { return head.concat([["the block's shape can be checked", false, e.message]]); }   // never freeze the page on an odd block
   }
 
-  // ---------- projections (the demo's charts; not in the Python, so tests/test_js_parity.py checks their properties)
   function expectedRating(er, conviction) {     // verify.expected_rating
     if (er >= OVERWEIGHT && CONVICTION_OK.has(conviction)) return "Overweight";
     if (er <= UNDERWEIGHT) return "Underweight";
     return "Equal-weight";
   }
 
+  // ---------- projections (the demo's charts; not in the Python, so tests/test_js_parity.py checks their properties)
   function rng(seed) {                          // mulberry32: the same seed draws the same paths
     let a = seed >>> 0;
     return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
@@ -362,6 +395,6 @@
   // The rating rule's numbers, for the page's gauge and notes: one source, the same as verify.py.
   const THRESHOLDS = Object.freeze({ overweight: OVERWEIGHT, underweight: UNDERWEIGHT, conviction_ok: Object.freeze([...CONVICTION_OK]) });
 
-  const api = { PortfolioError, validate, valued, sizePosition, extract, check, checkMemo, expectedRating, project, tradeMetrics, sortTrades, TRADE_SORTS, THRESHOLDS };
+  const api = { PortfolioError, validate, valued, sizePosition, extract, check, checkMemo, expectedRating, project, tradeMetrics, sortTrades, TRADE_SORTS, THRESHOLDS, round2 };
   if (typeof module === "object" && module.exports) module.exports = api; else root.IpoCore = api;
 })(typeof self !== "undefined" ? self : this);
