@@ -73,7 +73,7 @@ python evaluation/tracker.py                             # the paper bot against
 ## Tests
 
 ```bash
-python -m pytest -q tests                  # 173 offline tests, free (10 need Node: the browser demo against the Python)
+python -m pytest -q tests                  # 174 offline tests, free (10 need Node: the browser demo against the Python)
 IPO_BOT_LIVE=1 python -m pytest -q tests/test_live_market.py   # 15 live checks on real SEC filings and prices
 python testkit/kit.py regress --yes        # the test kit, live: calculation cases, hallucination traps, a tools-off
                                            # stale-data test, rule tests; costs API credit

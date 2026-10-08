@@ -61,7 +61,7 @@ def parse(text, mech):
 
 
 def audit(memo, sources=None, client=None):
-    client = client or anthropic.Anthropic()
+    client = client or ipo_bot.client_or_exit()
     content, mech = build_request(memo, sources)
     with client.messages.stream(
         model=ipo_bot.MODEL,

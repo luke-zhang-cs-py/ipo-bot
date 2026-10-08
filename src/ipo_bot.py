@@ -28,6 +28,20 @@ except ImportError:
 HERE = pathlib.Path(__file__).resolve().parents[1]   # the repo root: .env, prompts/, memos/ and forecasts/ live there
 
 
+NO_KEY = ("No Claude API key: set ANTHROPIC_API_KEY in .env (see .env.example; console.anthropic.com > API Keys).\n"
+          "Without one, everything except writing memos still works: the browser demo (docs/app), python -m pytest tests,\n"
+          "src/verify.py on a saved memo, testkit/kit.py calc, and the evaluation/ scripts (benchmark, strategies,\n"
+          "IPO evaluation, paper replay, tracker).")
+
+
+def client_or_exit():
+    """An Anthropic client, or a plain explanation instead of the SDK's authentication traceback."""
+    import os
+    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
+        raise SystemExit(NO_KEY)
+    return anthropic.Anthropic()
+
+
 def load_env(path=HERE / ".env"):
     """KEY=value lines from .env into the environment; a variable already set wins. No other syntax."""
     import os
@@ -85,7 +99,7 @@ class Bot:
     tools limited to that date and no web search. Every tool result is kept in self.sources for the auditor."""
 
     def __init__(self, client=None, log=print, use_tools=True, as_of=None):
-        self.client = client or anthropic.Anthropic()
+        self.client = client or client_or_exit()
         self.messages = []
         self.log = log
         self.use_tools = use_tools

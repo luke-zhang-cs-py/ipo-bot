@@ -6,6 +6,8 @@ stand-in client. No network and no API key needed.
 import json
 import pathlib
 import sys
+
+import pytest
 from types import SimpleNamespace as NS
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
@@ -224,3 +226,11 @@ def test_env_file_fills_unset_variables_only(tmp_path, monkeypatch):
     assert os.environ["SEC_USER_AGENT"] == "A Person a@example.com"
     assert os.environ["FRED_API_KEY"] == "already-set", "the environment wins over the file"
     assert "EMPTY" not in os.environ
+
+
+def test_no_api_key_gives_a_plain_message_not_a_traceback(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    with pytest.raises(SystemExit) as e:
+        ipo_bot.Bot(log=lambda s: None)
+    assert "No Claude API key" in str(e.value) and "still works" in str(e.value)
