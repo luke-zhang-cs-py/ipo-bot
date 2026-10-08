@@ -17,6 +17,9 @@ import zoneinfo
 
 import anthropic
 
+import common
+from common import HERE
+
 try:
     # Verify HTTPS with the operating system's certificate store: needed behind a network that inspects
     # traffic, harmless elsewhere.
@@ -24,8 +27,6 @@ try:
     truststore.inject_into_ssl()
 except ImportError:
     pass
-
-HERE = pathlib.Path(__file__).resolve().parents[1]   # the repo root: .env, prompts/, memos/ and forecasts/ live there
 
 
 NO_KEY = ("No Claude API key: set ANTHROPIC_API_KEY in .env (see .env.example; console.anthropic.com > API Keys).\n"
@@ -178,20 +179,18 @@ def save(question, memo, sources=None):
     out = HERE / "memos"
     out.mkdir(exist_ok=True)
     stamp = dt.datetime.now(BOSTON).strftime("%Y-%m-%d_%H%M%S")
-    path = out / f"{stamp}.md"
+    path, n = out / f"{stamp}.md", 1
+    while path.exists():                       # two memos in one second: the second gets its own file
+        n += 1
+        path = out / f"{stamp}-{n}.md"
     path.write_text(f"> {question}\n\n{memo}\n", encoding="utf-8")
     if sources is not None:
-        (out / f"{stamp}.sources.json").write_text(json.dumps(sources, indent=1, default=str), encoding="utf-8")
+        (out / f"{path.stem}.sources.json").write_text(json.dumps(sources, indent=1, default=str), encoding="utf-8")
     return path
 
 
 def main(argv):
-    # Memos use characters a Windows console's default code page lacks (≥, —, ☒ from filings).
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, ValueError):
-            pass
+    common.utf8_console()
     argv = list(argv)
     do_audit = "--audit" in argv
     if do_audit:

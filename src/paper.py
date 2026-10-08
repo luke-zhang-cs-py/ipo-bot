@@ -8,6 +8,11 @@ signals.json: [{"time": ISO, "symbol", "entry", "stop", "conviction", "sector"?,
 (the bot's portfolio-mode buys, or any strategy's). Each run appends to forecasts/paper/log.jsonl: the signal,
 what the rules allowed, each order sent, each fill, and the time from signal to fill.
 
+Before the signals, a run asks the broker which of the log's open positions (its fills, less the exits already
+logged) have closed since: SimBroker when a quote's bid reaches the stop, Alpaca when the position is gone. Each
+one gets an exit line ({"exit": {"day", "symbol", "shares", "price", "stopped"}}) and goes to the monitor, so its
+cooldown and stoploss guard see stop-outs from this run and every earlier one.
+
 The forward test the brief asks for is two weeks or more of this against Alpaca's paper account: set
 ALPACA_KEY_ID and ALPACA_SECRET_KEY in .env (a free paper account; no real money moves) and run it daily.
 The report then shows the signal-to-execution divergence: signals the rules blocked (and which rule),
@@ -27,11 +32,12 @@ import urllib.request
 import execution
 import monitor as monitor_mod
 import portfolio
+from common import HERE
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-LOG = ROOT / "forecasts" / "paper" / "log.jsonl"
+LOG = HERE / "forecasts" / "paper" / "log.jsonl"
 PAPER_HOST = "paper-api.alpaca.markets"
 ALPACA_PAPER = "https://paper-api.alpaca.markets"
+STOP_TYPES = ("stop", "stop_limit", "trailing_stop")   # Alpaca order types that are a stop being hit
 
 
 class AlpacaPaper:
@@ -80,13 +86,68 @@ class AlpacaPaper:
         # Alpaca charges no commission on US equities; regulatory fees on sales are not modelled here
         return {"order_id": oid, "filled": filled, "avg_price": avg, "fee": 0.0, "status": status}
 
+    def closed(self, positions):
+        """The positions (open_positions' shape) Alpaca no longer holds: each was sold, and counts as stopped when
+        a stop order sold it or the sale was at or under its stop."""
+        held = {str(p.get("symbol", "")).upper() for p in self.http("GET", f"{self.base}/v2/positions") or []}
+        out = []
+        for sym, pos in positions.items():
+            if sym in held:
+                continue
+            q = urllib.parse.urlencode({"status": "closed", "symbols": sym, "side": "sell", "direction": "desc", "limit": 10})
+            sells = [o for o in self.http("GET", f"{self.base}/v2/orders?{q}") or [] if float(o.get("filled_qty") or 0) > 0]
+            sell = sells[0] if sells else {}
+            price = float(sell["filled_avg_price"]) if sell.get("filled_avg_price") else None
+            stopped = sell.get("type") in STOP_TYPES or (price is not None and price <= pos["stop"])
+            out.append({"symbol": sym, "shares": pos["shares"], "price": price, "stopped": bool(stopped),
+                        **({"day": str(sell["filled_at"])[:10]} if sell.get("filled_at") else {})})
+        return out
+
+
+def read_log(log=LOG):
+    """The paper log's lines, oldest first; [] before the first run."""
+    log = pathlib.Path(log)
+    if not log.exists():
+        return []
+    return [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines() if x.strip()]
+
+
+def open_positions(lines):
+    """{symbol: {"shares", "stop"}}: what the log's fills bought, less what its exit lines closed. A second buy of
+    a stock adds its shares and moves the stop to the newer one."""
+    pos = {}
+    for ln in lines:
+        if "exit" in ln:
+            pos.pop(str(ln["exit"]["symbol"]).upper(), None)
+        elif (ln.get("result") or {}).get("stop_order"):
+            order = ln["result"]["stop_order"]
+            sym = str(order["symbol"]).upper()
+            pos[sym] = {"shares": pos.get(sym, {}).get("shares", 0) + order["shares"], "stop": order["stop"]}
+    return pos
+
 
 def run(signals, view, broker, log=LOG, clock=time.time, monitor=None, now=None):
-    """Each signal through the monitor, the rules and the broker, one log line each. Returns the lines."""
+    """Each signal through the monitor, the rules and the broker, one log line each. Returns the signal lines.
+    First, the log's open positions the broker reports closed (a broker with closed()) are logged as exits and
+    recorded in the monitor. A monitor made here also learns every exit already in the log; one passed in keeps
+    its own history (a replay passes the same monitor to every day's run and records its stop-outs itself)."""
     log.parent.mkdir(parents=True, exist_ok=True)
-    monitor = monitor or monitor_mod.Monitor(kill_file=log.parent / "KILL")
+    earlier = read_log(log)
+    if monitor is None:
+        monitor = monitor_mod.Monitor(kill_file=log.parent / "KILL")
+        for ln in earlier:
+            if "exit" in ln:
+                monitor.record_exit(ln["exit"]["day"], ln["exit"]["symbol"], ln["exit"]["stopped"])
+    held = open_positions(earlier)
+    closed = broker.closed(held) if held and hasattr(broker, "closed") else []
+    today = (monitor_mod._ts(now) if now else dt.datetime.now(dt.timezone.utc)).date().isoformat()
     lines = []
     with log.open("a", encoding="utf-8") as f:
+        for e in closed:
+            e = {"day": today, **e}
+            monitor.record_exit(e["day"], e["symbol"], e["stopped"])
+            logged = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+            f.write(json.dumps({"logged": logged, "exit": e}) + "\n")
         for s in signals:
             t0 = clock()
             stop = monitor.gate(s, now=now)
@@ -110,7 +171,9 @@ def run(signals, view, broker, log=LOG, clock=time.time, monitor=None, now=None)
 
 
 def divergence(lines):
-    """Signals against executions: how many went through whole, in part, not at all, and why."""
+    """Signals against executions: how many went through whole, in part, not at all, and why; and the exits."""
+    exits = [ln["exit"] for ln in lines if "exit" in ln]
+    lines = [ln for ln in lines if "result" in ln]
     n = len(lines)
     by = {}
     for ln in lines:
@@ -127,28 +190,28 @@ def divergence(lines):
             "worst_slippage_vs_signal": max(slip) if slip else None,
             "median_latency_s": statistics.median(ln["latency_s"] for ln in lines) if lines else None,
             "fees": round(sum(ln["result"].get("fees", 0.0) for ln in lines), 2),
-            "warnings": sorted({w for ln in lines for w in ln["result"].get("warnings", [])})}
+            "warnings": sorted({w for ln in lines for w in ln["result"].get("warnings", [])}),
+            "exits": len(exits), "stop_outs": sum(1 for e in exits if e.get("stopped"))}
 
 
 def main(argv):
-    if not argv or argv[0] not in ("run", "report"):
+    if not argv or argv[0] not in ("run", "report") or (argv[0] == "run" and len(argv) < 2):
         print(__doc__)
         return 1
     if argv[0] == "report":
-        lines = [json.loads(x) for x in LOG.read_text(encoding="utf-8").splitlines() if x.strip()] if LOG.exists() else []
-        print(json.dumps(divergence(lines), indent=1))
+        print(json.dumps(divergence(read_log(LOG)), indent=1))
         return 0
     import ipo_bot
     ipo_bot.load_env()
     signals = json.loads(pathlib.Path(argv[1]).read_text(encoding="utf-8"))
-    pf_path = argv[argv.index("--portfolio") + 1] if "--portfolio" in argv else str(ROOT / "portfolio.example.json")
+    pf_path = argv[argv.index("--portfolio") + 1] if "--portfolio" in argv else str(HERE / "portfolio.example.json")
     view = portfolio.valued(portfolio.load(pf_path))
     if "--alpaca" in argv:
         broker = AlpacaPaper()
     else:
         broker = execution.SimBroker({s["symbol"]: {"bid": s["entry"] * 0.999, "ask": s["entry"] * 1.001,
                                                     "depth": int(s.get("avg_volume") or 100_000) // 50} for s in signals})
-    lines = run(signals, view, broker)
+    lines = run(signals, view, broker, log=LOG)
     print(json.dumps(divergence(lines), indent=1))
     return 0
 

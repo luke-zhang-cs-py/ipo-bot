@@ -15,13 +15,15 @@ Each check names itself when it blocks, so the paper log says why a signal never
 import datetime as dt
 import pathlib
 
+from common import HERE
+
 MAX_API_FAILURES = 3
 MAX_QUOTE_AGE_S = 60.0
 MAX_SPREAD_PCT = 0.5
 MAX_DEVIATION_PCT = 0.5
 COOLDOWN_DAYS = 3
 STOP_GUARD_COUNT, STOP_GUARD_DAYS, STOP_GUARD_PAUSE = 3, 10, 5
-KILL_FILE = pathlib.Path(__file__).resolve().parents[1] / "forecasts" / "paper" / "KILL"
+KILL_FILE = HERE / "forecasts" / "paper" / "KILL"
 
 
 def _ts(v):

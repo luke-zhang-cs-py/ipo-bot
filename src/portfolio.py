@@ -38,6 +38,7 @@ DEFAULT_RULES = {"max_position_pct": 10.0, "max_sector_pct": 30.0, "risk_per_tra
                  "min_cash_pct": 5.0, "conviction_scale": {"Low": 0.5, "Medium": 1.0, "High": 1.5}}
 GUARDRAILS = {"max_daily_loss_pct": 100.0, "earnings_blackout_hours": 24 * 30.0, "max_volume_pct": 100.0,   # each one's ceiling
               "max_order_value": 1e12, "max_gross_exposure_pct": 100.0, "max_drawdown_pct": 100.0}
+SLACK = 1e-9    # float noise: a weight that lands on a limit to the ninth decimal is at the limit, not over it
 
 
 class PortfolioError(ValueError):
@@ -132,16 +133,16 @@ def valued(pf, quote=None):
     rules = pf["rules"]
     breaches = []
     for r in rows:
-        if r["weight_pct"] > rules["max_position_pct"] + 1e-9:
+        if r["weight_pct"] > rules["max_position_pct"] + SLACK:
             excess = r["value"] - equity * rules["max_position_pct"] / 100
             breaches.append({"rule": "max_position_pct", "symbol": r["symbol"], "weight_pct": round(r["weight_pct"], 2),
                              "shares_over": math.ceil(excess / r["price"])})
     for s, v in sectors.items():
         pct = 100 * v / equity if equity else 0.0
-        if pct > rules["max_sector_pct"] + 1e-9:
+        if pct > rules["max_sector_pct"] + SLACK:
             breaches.append({"rule": "max_sector_pct", "sector": s, "weight_pct": round(pct, 2)})
     cash_pct = 100 * pf["cash"] / equity if equity else 0.0
-    if cash_pct < rules["min_cash_pct"] - 1e-9:
+    if cash_pct < rules["min_cash_pct"] - SLACK:
         breaches.append({"rule": "min_cash_pct", "cash_pct": round(cash_pct, 2)})
     return {"as_of": pf["as_of"], "equity": equity, "cash": pf["cash"], "cash_pct": cash_pct, "holdings": rows,
             "sector_pct": {s: 100 * v / equity if equity else 0.0 for s, v in sectors.items()},
@@ -204,7 +205,7 @@ def size_position(view, symbol, entry_price, stop_price, conviction="Medium", se
     warnings = []
     if rules.get("max_daily_loss_pct") is not None:
         lost = -min(0.0, view.get("day_pnl", 0.0))
-        if equity and lost >= equity * rules["max_daily_loss_pct"] / 100 - 1e-9:
+        if equity and lost >= equity * rules["max_daily_loss_pct"] / 100 - SLACK:
             limits["daily_loss"] = 0
     if rules.get("earnings_blackout_hours") is not None:
         if next_earnings is None:
@@ -227,7 +228,7 @@ def size_position(view, symbol, entry_price, stop_price, conviction="Medium", se
         high = view.get("equity_high")
         if high is None:
             warnings.append("max_drawdown_pct is set but equity_high is not: the drawdown was not checked")
-        elif equity <= high * (1 - rules["max_drawdown_pct"] / 100) + 1e-9:
+        elif equity <= high * (1 - rules["max_drawdown_pct"] / 100) + SLACK:
             limits["drawdown"] = 0
     if view.get("halted"):
         limits["kill_switch"] = 0

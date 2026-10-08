@@ -23,6 +23,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from common import HERE
+
 TIMEOUT = 25            # seconds per HTTP request
 MAX_RESULT_CHARS = 30_000
 DOC_CHUNK_CHARS = 25_000
@@ -63,9 +65,36 @@ def _result(source, data, note=""):
     if note:
         out["note"] = note
     text = json.dumps(out, default=str)
-    if len(text) > MAX_RESULT_CHARS:
-        text = text[:MAX_RESULT_CHARS] + '..."} [truncated: ask for a narrower request]'
-    return text
+    if len(text) <= MAX_RESULT_CHARS:
+        return text
+    # Too long: cut the data down (lists to their first half, long strings to their start, pass after pass) so
+    # the result stays valid JSON that the model and _live_quote can read, and say that it was cut.
+    out["truncated"] = True
+    out["note"] = ((note + "; ") if note else "") + "truncated: ask for a narrower request"
+    data = json.loads(json.dumps(data, default=str))       # plain JSON types, so _halve sees lists and strings
+    while True:
+        smaller = _halve(data)
+        if smaller == data:                                # nothing left to cut (a huge flat object)
+            out["data"] = None
+            return json.dumps(out)
+        data = out["data"] = smaller
+        text = json.dumps(out)
+        if len(text) <= MAX_RESULT_CHARS:
+            return text
+
+
+LONG_STRING = 200      # _halve cuts strings longer than this (filing text); dates, names and ids stay whole
+
+
+def _halve(data):
+    """data a step smaller: each list keeps its first half, each long string its first half."""
+    if isinstance(data, list):
+        return [_halve(x) for x in data[:len(data) // 2]]
+    if isinstance(data, dict):
+        return {k: _halve(v) for k, v in data.items()}
+    if isinstance(data, str) and len(data) > LONG_STRING:
+        return data[:len(data) // 2]
+    return data
 
 
 # ----------------------------------------------------------------------------- SEC EDGAR
@@ -104,7 +133,7 @@ def edgar_filings(cik, forms=None, limit=20):
     """Recent filings, optionally only some form types (e.g. ["S-1", "S-1/A", "424B4"])."""
     url = f"https://data.sec.gov/submissions/CIK{_cik10(cik)}.json"
     sub = json.loads(_get(url, _sec_headers()))
-    want = {f.upper() for f in (forms or [])}
+    want = {str(f).upper() for f in ([forms] if isinstance(forms, str) else forms or [])}   # "S-1" alone is one form
     limit = max(1, min(int(limit), 100))
     out = []
 
@@ -195,7 +224,7 @@ def edgar_financials(cik, concepts=None, periods=8):
     url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{_cik10(cik)}.json"
     facts = json.loads(_get(url, _sec_headers())).get("facts", {})
     pool = {**facts.get("us-gaap", {}), **facts.get("ifrs-full", {}), **facts.get("dei", {})}
-    names = concepts or FACT_CONCEPTS
+    names = ([concepts] if isinstance(concepts, str) else concepts) or FACT_CONCEPTS   # one name, not its letters
     out = {}
     for name in names:
         c = pool.get(name)
@@ -327,6 +356,8 @@ def calculate(expression, variables=None):
     expr = str(expression or "")
     if len(expr) > 2000:
         raise ToolError("expression too long")
+    if variables is not None and not isinstance(variables, dict):
+        raise ToolError("variables must be an object of names and numbers")
     names = {}
     for k, v in (variables or {}).items():
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,40}", str(k)) or isinstance(v, bool) or not isinstance(v, (int, float)):
@@ -455,7 +486,7 @@ def portfolio_size(symbol, entry_price, stop_price, conviction, sector=None, nex
 # ----------------------------------------------------------------------------- forecast ledger
 
 # Each rating is logged so evaluation/benchmark.py --ledger can score it against simple algorithms once it matures.
-LEDGER = pathlib.Path(__file__).resolve().parents[1] / "forecasts" / "ledger.jsonl"
+LEDGER = HERE / "forecasts" / "ledger.jsonl"
 
 
 def record_forecast(symbol, rating, expected_return_pct, price, price_date, horizon_months=12,

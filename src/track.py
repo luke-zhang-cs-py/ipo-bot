@@ -17,6 +17,7 @@ After the horizon (12 months by default) each one is scored on three questions:
    index, an Underweight lagged it, an Equal-weight finished within 10 points of it.
 Prices are daily closes from Yahoo's public chart endpoint (splits and dividends not adjusted).
 """
+import calendar
 import datetime as dt
 import json
 import pathlib
@@ -30,7 +31,9 @@ try:
 except ImportError:
     pass
 
-HERE = pathlib.Path(__file__).resolve().parents[1]   # the repo root: .env, prompts/, memos/ and forecasts/ live there
+import common
+from common import HERE
+
 LEDGER = HERE / "forecasts" / "ledger.jsonl"
 BENCHMARK = "SPY"
 EQUAL_BAND = 10.0           # an Equal-weight call is right if it ends within this many points of the index
@@ -38,13 +41,10 @@ _cache = {}
 
 
 def add_months(d, n):
+    """n months after d; the 31st lands on the month's last day when the month is shorter."""
     m = d.month - 1 + n
     y, m = d.year + m // 12, m % 12 + 1
-    for day in (d.day, 30, 29, 28):
-        try:
-            return dt.date(y, m, day)
-        except ValueError:
-            continue
+    return dt.date(y, m, min(d.day, calendar.monthrange(y, m)[1]))
 
 
 def closes(symbol, start, end):
@@ -166,11 +166,7 @@ def load(path=LEDGER):
 
 
 def main(argv):
-    for s in (sys.stdout, sys.stderr):
-        try:
-            s.reconfigure(encoding="utf-8")
-        except (AttributeError, ValueError):
-            pass
+    common.utf8_console()
     rows = load(argv[0] if argv else LEDGER)
     if not rows:
         print("No forecasts logged yet. The bot logs each rating it gives on a listed stock to forecasts/ledger.jsonl.")

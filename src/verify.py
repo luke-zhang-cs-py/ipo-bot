@@ -14,8 +14,12 @@ import json
 import re
 import sys
 
+import common
+
 REL_TOL = 0.005          # 0.5%: rounding in a memo, not a different number
+ABS_TOL = 1e-9           # float noise: two figures this close are the same number even when both are near zero
 OVERWEIGHT, UNDERWEIGHT = 15.0, -10.0
+BUY_BELOW_DIVISOR = 1 + OVERWEIGHT / 100   # 1.15: buy below PWV / 1.15, the highest price that still gives +15%
 CONVICTION_OK = {"Medium", "High"}
 RATINGS = {"Overweight", "Equal-weight", "Underweight", "NOT RATED"}
 
@@ -41,18 +45,31 @@ def extract(memo):
     raise BlockError("no ```json block with a \"key_numbers\" object")
 
 
-def close(a, b, rel=REL_TOL, abs_tol=1e-9):
+def close(a, b, rel=REL_TOL, abs_tol=ABS_TOL):
     return a is not None and b is not None and abs(a - b) <= max(rel * max(abs(a), abs(b)), abs_tol)
 
 
-def _num(x):
+def _plain_number(x):
+    """x when it is an int or float (not a bool), else None: a model-written field that may hold anything."""
     return x if isinstance(x, (int, float)) and not isinstance(x, bool) else None
+
+
+def _as_list(v):
+    """A model-written list field as a list: a lone value becomes a list of one, nothing an empty list."""
+    if isinstance(v, (list, tuple)):
+        return list(v)
+    return [] if v in (None, "", {}) else [v]
+
+
+def _named(d, name):
+    """d[name] for a name the model wrote, which may be a list or an object rather than a string."""
+    return d.get(name) if isinstance(name, str) else None
 
 
 def _input(k, name):
     inputs = k.get("inputs")
     v = inputs.get(name) if isinstance(inputs, dict) else None
-    return _num(v.get("value")) if isinstance(v, dict) else None
+    return _plain_number(v.get("value")) if isinstance(v, dict) else None
 
 
 def _trading_days_between(a, b):
@@ -71,7 +88,7 @@ def _date(s):
 
 
 def _flagged(k, *words):
-    text = " ".join(str(f) for f in (k.get("flags") or [])).lower()
+    text = " ".join(str(f) for f in _as_list(k.get("flags"))).lower()
     return all(w.lower() in text for w in words)
 
 
@@ -90,7 +107,7 @@ def pwv(scen):
 
 
 def expected_rating(expected_return_pct, conviction):
-    if expected_return_pct >= OVERWEIGHT and conviction in CONVICTION_OK:
+    if expected_return_pct >= OVERWEIGHT and isinstance(conviction, str) and conviction in CONVICTION_OK:
         return "Overweight"
     if expected_return_pct <= UNDERWEIGHT:
         return "Underweight"
@@ -111,11 +128,13 @@ def check(k):
     add("outputs is an object", isinstance(outputs, dict), type(outputs).__name__)
     inputs = inputs if isinstance(inputs, dict) else {}
     outputs = outputs if isinstance(outputs, dict) else {}
-    unknown = set(k.get("unknown") or [])
-    sources = k.get("sources") or []
+    unknown = {str(u) for u in _as_list(k.get("unknown"))}
+    sources = _as_list(k.get("sources"))
     as_of = _date(k.get("as_of"))
     add("as_of date present", as_of is not None, str(k.get("as_of")))
     subj = k.get("subject") or {}
+    add("subject is an object", isinstance(subj, dict), type(subj).__name__)
+    subj = subj if isinstance(subj, dict) else {}
     add("identity: company, ticker, exchange and share class given",
         all(str(subj.get(f) or "").strip() for f in ("company", "ticker", "exchange", "share_class")),
         json.dumps(subj))
@@ -129,7 +148,7 @@ def check(k):
         if val is None:
             add(f"{name}: missing value is listed in unknown", name in unknown)
             continue
-        add(f"{name}: value is a plain number", _num(val) is not None, repr(val))
+        add(f"{name}: value is a plain number", _plain_number(val) is not None, repr(val))
         add(f"{name}: has a source", bool(str(v.get("source") or "").strip()))
         add(f"{name}: has an as-of date", _date(v.get("as_of")) is not None, str(v.get("as_of")))
     add("sources are listed", bool(sources), f"{len(sources)} sources")
@@ -143,13 +162,13 @@ def check(k):
 
     # A4: reconcile
     price, shares = _input(k, "price"), _input(k, "diluted_shares")
-    mc = _num(outputs.get("market_cap"))
+    mc = _plain_number(outputs.get("market_cap"))
     if price is not None and shares is not None:
         want = market_cap(price, shares)
         add("market cap = price x fully diluted shares", close(mc, want), f"block {mc}, recomputed {want:,.0f}")
     elif mc is not None:
         add("market cap has both inputs", False, "price or diluted_shares is missing but market_cap is given")
-    ev = _num(outputs.get("enterprise_value"))
+    ev = _plain_number(outputs.get("enterprise_value"))
     debt, cash = _input(k, "debt"), _input(k, "cash")
     if mc is not None and debt is not None and cash is not None:
         want = enterprise_value(mc, debt, cash, _input(k, "preferred") or 0.0, _input(k, "minority_interest") or 0.0)
@@ -158,26 +177,27 @@ def check(k):
     elif ev is not None:
         add("EV has its inputs", False, "market_cap, debt or cash is missing but enterprise_value is given")
     values = {**{n: _input(k, n) for n in inputs}, "market_cap": mc, "enterprise_value": ev}
-    multiples = [m for m in outputs.get("multiples") or [] if isinstance(m, dict)]
-    add("every multiple is an object", len(multiples) == len(outputs.get("multiples") or []), "")
+    listed = _as_list(outputs.get("multiples"))
+    multiples = [m for m in listed if isinstance(m, dict)]
+    add("every multiple is an object", len(multiples) == len(listed), "")
     for m in multiples:
-        num, den, val = values.get(m.get("numerator")), values.get(m.get("denominator")), _num(m.get("value"))
+        num, den, val = _named(values, m.get("numerator")), _named(values, m.get("denominator")), _plain_number(m.get("value"))
         if num is None or den in (None, 0):
             add(f"multiple {m.get('name')}: inputs present", False, f"{m.get('numerator')} / {m.get('denominator')}")
         else:
             add(f"multiple {m.get('name')} recomputes", close(val, num / den, rel=0.01),
                 f"block {val}, recomputed {num / den:.4g}")
-    for seg in [s for s in k.get("segments") or [] if isinstance(s, dict)]:
-        total = values.get(seg.get("total"))
-        parts = [_num(x.get("value")) if isinstance(x, dict) else None for x in seg.get("parts") or []]
+    for seg in [s for s in _as_list(k.get("segments")) if isinstance(s, dict)]:
+        total = _named(values, seg.get("total"))
+        parts = [_plain_number(x.get("value")) if isinstance(x, dict) else None for x in _as_list(seg.get("parts"))]
         if total is not None and parts and None not in parts:
             add(f"segments add up to {seg.get('total')}", close(sum(parts), total, rel=0.01),
                 f"parts {sum(parts):,.0f}, total {total:,.0f}")
 
     # A5: one period per multiple
     for m in multiples:
-        periods = {str(inputs.get(x, {}).get("period") or "") for x in (m.get("numerator"), m.get("denominator"))
-                   if isinstance(inputs.get(x), dict)}
+        periods = {str(_named(inputs, x).get("period") or "") for x in (m.get("numerator"), m.get("denominator"))
+                   if isinstance(_named(inputs, x), dict)}
         named = str(m.get("name") or "")                 # "EV/Revenue LTM" promises LTM inputs
         kinds = {w for per in periods | {named} for w in ("LTM", "NTM", "FY") if re.search(rf"\b{w}", per.upper())}
         add(f"multiple {m.get('name')}: one kind of period", len(kinds) <= 1,
@@ -200,7 +220,7 @@ def check(k):
     # A8: scenarios
     scen = k.get("scenarios")
     rating = k.get("rating")
-    add("rating is one of the four", rating in RATINGS, str(rating))
+    add("rating is one of the four", isinstance(rating, str) and rating in RATINGS, str(rating))
     if rating == "NOT RATED":
         add("NOT RATED has no scenarios", not scen)
     elif isinstance(scen, dict):
@@ -211,15 +231,15 @@ def check(k):
             add("scenarios have bull, base and bear values and probabilities", False, json.dumps(scen)[:200])
         else:
             add("probabilities add up to 100%", abs(sum(probs.values()) - 100) < 0.01, f"{sum(probs.values())}")
-            add("probabilities in 5% steps", all(abs(p / 5 - round(p / 5)) < 1e-9 for p in probs.values()),
+            add("probabilities in 5% steps", all(abs(p / 5 - round(p / 5)) < ABS_TOL for p in probs.values()),
                 str(list(probs.values())))
             add("bear < base < bull", vals["bear"] < vals["base"] < vals["bull"],
                 f"{vals['bear']} / {vals['base']} / {vals['bull']}")
             want = sum(vals[c] * probs[c] / 100 for c in vals)   # from the checked numbers, not the raw text
-            add("PWV matches the probabilities and values", close(_num(scen.get("pwv")), want),
+            add("PWV matches the probabilities and values", close(_plain_number(scen.get("pwv")), want),
                 f"block {scen.get('pwv')}, recomputed {want:.4g}")
-            ref = _num(scen.get("reference_price"))
-            er = _num(scen.get("expected_return_pct"))
+            ref = _plain_number(scen.get("reference_price"))
+            er = _plain_number(scen.get("expected_return_pct"))
             if ref:
                 want_er = 100 * (want / ref - 1)
                 add("expected return = PWV / reference price - 1", er is not None and abs(er - want_er) < 0.5,
@@ -237,11 +257,11 @@ def check(k):
             if isinstance(ipo, dict):
                 add("Participate only with an Overweight rating",
                     (ipo.get("at_offer") == "Participate") == (rating == "Overweight"), json.dumps(ipo))
-                bb = _num(ipo.get("buy_below"))
+                bb = _plain_number(ipo.get("buy_below"))
                 if ipo.get("aftermarket") == "Buy below":
-                    add("buy-below = PWV / 1.15", close(bb, want / 1.15, rel=0.01),
-                        f"block {bb}, recomputed {want / 1.15:.4g}")
-            stop = _num(k.get("stop_working_price"))
+                    add(f"buy-below = PWV / {BUY_BELOW_DIVISOR:g}", close(bb, want / BUY_BELOW_DIVISOR, rel=0.01),
+                        f"block {bb}, recomputed {want / BUY_BELOW_DIVISOR:.4g}")
+            stop = _plain_number(k.get("stop_working_price"))
             add("a rating comes with a stop-working price", stop is not None, str(k.get("stop_working_price")))
             if stop is not None and ref:
                 add("stop-working price below the reference price", stop < ref, f"{stop} vs {ref}")
@@ -259,11 +279,7 @@ def check_memo(memo):
 
 
 def main(argv):
-    for s in (sys.stdout, sys.stderr):
-        try:
-            s.reconfigure(encoding="utf-8")
-        except (AttributeError, ValueError):
-            pass
+    common.utf8_console()
     paths = [a for a in argv if not a.startswith("--")]
     if not paths:
         sys.exit(__doc__)

@@ -15,13 +15,16 @@ import sys
 
 import anthropic
 
+import checks
+import common
 import ipo_bot
 import verify
+from common import HERE
 
-HERE = pathlib.Path(__file__).resolve().parents[1]   # the repo root: .env, prompts/, memos/ and forecasts/ live there
 AUDITOR = (HERE / "prompts" / "auditor_prompt.md").read_text(encoding="utf-8")
 RULES = [f"A{n}" for n in range(1, 12)]
 SOURCES_CHARS = 120_000
+MAX_TOKENS = 16_000      # room for adaptive thinking plus the JSON verdict on 11 rules, which runs to a few thousand
 
 SCHEMA = {
     "type": "object",
@@ -39,8 +42,15 @@ SCHEMA = {
 }
 
 
+NO_BLOCK = "no ```json block"      # verify's reason when a memo has no KEY NUMBERS block at all
+
+
 def build_request(memo, sources):
     mech = verify.check_memo(memo)
+    if (len(mech) == 1 and not mech[0][1] and mech[0][2].startswith(NO_BLOCK)
+            and ("NOT RATED" in memo or (checks.says_unknown(memo) and not checks.rated(memo)))):
+        # NOT RATED or "can't find it": an answer with no rating has no figures to put in a block
+        mech = [(mech[0][0], True, "not needed: the answer gives no rating")]
     src = json.dumps(sources or [], default=str)
     if len(src) > SOURCES_CHARS:
         src = src[:SOURCES_CHARS] + " ...[sources truncated]"
@@ -71,7 +81,7 @@ def audit(memo, sources=None, client=None):
     content, mech = build_request(memo, sources)
     with client.messages.stream(
         model=ipo_bot.MODEL,
-        max_tokens=16_000,
+        max_tokens=MAX_TOKENS,
         thinking={"type": "adaptive"},
         output_config={"effort": "high", "format": {"type": "json_schema", "schema": SCHEMA}},
         system=AUDITOR,
@@ -96,11 +106,7 @@ def report(result):
 
 
 def main(argv):
-    for s in (sys.stdout, sys.stderr):
-        try:
-            s.reconfigure(encoding="utf-8")
-        except (AttributeError, ValueError):
-            pass
+    common.utf8_console()
     if not argv:
         sys.exit(__doc__)
     memo = pathlib.Path(argv[0]).read_text(encoding="utf-8")

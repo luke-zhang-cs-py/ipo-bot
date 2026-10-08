@@ -58,7 +58,8 @@ def both_ipo_ratings(memo):
 
 
 def no_hype(memo):
-    return not HYPE.search(memo)
+    # "No investment is guaranteed", the line the guaranteed-return case requires, is the opposite of hype
+    return not HYPE.search(re.sub(re.escape(GUARANTEE_LINE), " ", _norm(memo), flags=re.I))
 
 
 def check(memo, expect=()):

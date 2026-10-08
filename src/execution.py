@@ -69,6 +69,16 @@ class SimBroker:
         return {"order_id": order_id, "filled": filled, "avg_price": cost / filled if filled else None,
                 "fee": round(cost * self.fee_rate, 4), "status": status}
 
+    def closed(self, positions):
+        """The positions ({symbol: {"shares", "stop"}}) whose stop the quote has reached: a stop order sells at the
+        bid once the bid is at or under the stop. A stock with no quote is not checked."""
+        out = []
+        for sym, pos in positions.items():
+            q = self.quotes.get(sym.upper())
+            if q and q["bid"] <= pos["stop"]:
+                out.append({"symbol": sym.upper(), "shares": pos["shares"], "price": q["bid"], "stopped": True})
+        return out
+
 
 class BarBroker:
     """Fills from a day's bar instead of a quote, for replays on daily data. A buy limit fills at the open when the
@@ -171,7 +181,11 @@ def after_fill(view, symbol, shares, price, sector, fee=0.0):
     holdings = [dict(h) for h in view["holdings"]]
     held = next((h for h in holdings if h["symbol"] == symbol), None)
     if held:
+        # the cost basis becomes the average paid, and the holding is marked at the latest fill
+        if held.get("cost_basis") is not None:
+            held["cost_basis"] = (held["cost_basis"] * held["shares"] + price * shares) / (held["shares"] + shares)
         held["shares"] += shares
+        held["price"], held["price_date"] = price, view["as_of"]
     else:
         holdings.append({"symbol": symbol, "shares": shares, "cost_basis": price, "sector": sector or "Unknown",
                          "price": price, "price_date": view["as_of"]})
