@@ -9,6 +9,7 @@
 
   const GUARDRAILS = { max_daily_loss_pct: 100, earnings_blackout_hours: 24 * 30, max_volume_pct: 100,   // each one's ceiling
     max_order_value: 1e12, max_gross_exposure_pct: 100, max_drawdown_pct: 100 };
+  const SLACK = 1e-9;    // float noise: a weight that lands on a limit to the ninth decimal is at the limit, not over it
 
   class PortfolioError extends Error {}
 
@@ -66,16 +67,16 @@
       sectors[r.sector] = (sectors[r.sector] || 0) + r.value;
     }
     const rules = pf.rules, breaches = [];
-    for (const r of rows) if (r.weight_pct > rules.max_position_pct + 1e-9) {
+    for (const r of rows) if (r.weight_pct > rules.max_position_pct + SLACK) {
       const excess = r.value - equity * rules.max_position_pct / 100;
       breaches.push({ rule: "max_position_pct", symbol: r.symbol, weight_pct: round2(r.weight_pct), shares_over: Math.ceil(excess / r.price) });
     }
     for (const [s, v] of Object.entries(sectors)) {
       const pct = equity ? 100 * v / equity : 0;
-      if (pct > rules.max_sector_pct + 1e-9) breaches.push({ rule: "max_sector_pct", sector: s, weight_pct: round2(pct) });
+      if (pct > rules.max_sector_pct + SLACK) breaches.push({ rule: "max_sector_pct", sector: s, weight_pct: round2(pct) });
     }
     const cashPct = equity ? 100 * pf.cash / equity : 0;
-    if (cashPct < rules.min_cash_pct - 1e-9) breaches.push({ rule: "min_cash_pct", cash_pct: round2(cashPct) });
+    if (cashPct < rules.min_cash_pct - SLACK) breaches.push({ rule: "min_cash_pct", cash_pct: round2(cashPct) });
     const sectorPct = {};
     for (const [s, v] of Object.entries(sectors)) sectorPct[s] = equity ? 100 * v / equity : 0;
     return { as_of: pf.as_of, equity, cash: pf.cash, cash_pct: cashPct, holdings: rows, sector_pct: sectorPct, unpriced, rule_breaches: breaches, rules,
@@ -112,7 +113,7 @@
     const warnings = [];
     if (rules.max_daily_loss_pct != null) {
       const lost = -Math.min(0, view.day_pnl || 0);
-      if (equity && lost >= equity * rules.max_daily_loss_pct / 100 - 1e-9) limits.daily_loss = 0;
+      if (equity && lost >= equity * rules.max_daily_loss_pct / 100 - SLACK) limits.daily_loss = 0;
     }
     if (rules.earnings_blackout_hours != null) {
       if (opts.next_earnings == null) warnings.push("earnings_blackout_hours is set but no earnings date was given: the blackout was not checked");
@@ -132,7 +133,7 @@
     }
     if (rules.max_drawdown_pct != null) {
       if (view.equity_high == null) warnings.push("max_drawdown_pct is set but equity_high is not: the drawdown was not checked");
-      else if (equity <= view.equity_high * (1 - rules.max_drawdown_pct / 100) + 1e-9) limits.drawdown = 0;
+      else if (equity <= view.equity_high * (1 - rules.max_drawdown_pct / 100) + SLACK) limits.drawdown = 0;
     }
     if (view.halted) limits.kill_switch = 0;
     const shares = Math.max(0, Math.min(...Object.values(limits)));
@@ -145,7 +146,10 @@
   }
 
   // ---------------------------------------------------------------- verify.py
-  const REL_TOL = 0.005, OVERWEIGHT = 15, UNDERWEIGHT = -10, CONVICTION_OK = new Set(["Medium", "High"]);
+  const REL_TOL = 0.005;         // 0.5%: rounding in a memo, not a different number
+  const ABS_TOL = 1e-9;          // float noise: two figures this close are the same number even when both are near zero
+  const OVERWEIGHT = 15, UNDERWEIGHT = -10, CONVICTION_OK = new Set(["Medium", "High"]);
+  const BUY_BELOW_DIVISOR = 1 + OVERWEIGHT / 100;   // 1.15: buy below PWV / 1.15, the highest price that still gives +15%
   const RATINGS = new Set(["Overweight", "Equal-weight", "Underweight", "NOT RATED"]);
 
   function extract(memo) {
@@ -163,7 +167,10 @@
   // The block is written by a model, so any shape can arrive: a wrong shape is a failed check, read the way the Python reads it.
   const isDict = (x) => !!x && typeof x === "object" && !Array.isArray(x);
   const truthy = (x) => Array.isArray(x) || typeof x === "string" ? x.length > 0 : isDict(x) ? Object.keys(x).length > 0 : !!x;
-  const list = (x) => Array.isArray(x) ? x : typeof x === "string" ? [...x] : isDict(x) ? Object.keys(x) : [];    // what Python iterates
+  // verify._as_list: a list stays a list; null, "" and {} are nothing; any other lone value is a list of one
+  const asList = (x) => Array.isArray(x) ? x : x == null || x === "" || (isDict(x) && !Object.keys(x).length) ? [] : [x];
+  const named = (d, name) => typeof name === "string" && Object.hasOwn(d, name) ? d[name] : null;   // verify._named
+  const plainNumber = (x) => isNum(x) ? x : null;                                                   // verify._plain_number
   const pyStr = (x) => typeof x === "string" ? x : x == null ? "None" : typeof x === "boolean" ? (x ? "True" : "False") : typeof x === "object" ? JSON.stringify(x) : String(x);
   const pyType = (x) => Array.isArray(x) ? "list" : typeof x === "string" ? "str" : typeof x === "number" ? (Number.isInteger(x) ? "int" : "float") : typeof x === "boolean" ? "bool" : "dict";
   const DIGITS = "\\d(?:_?\\d)*", FLOAT = new RegExp("^[+-]?(?:" + DIGITS + "(?:\\.(?:" + DIGITS + ")?)?|\\." + DIGITS + ")(?:[eE][+-]?" + DIGITS + ")?$");
@@ -178,7 +185,7 @@
     }
     throw new TypeError("not a number: " + pyStr(x));
   }
-  const close = (a, b, rel = REL_TOL, abs = 1e-9) => a != null && b != null && Math.abs(a - b) <= Math.max(rel * Math.max(Math.abs(a), Math.abs(b)), abs);
+  const close = (a, b, rel = REL_TOL, abs = ABS_TOL) => a != null && b != null && Math.abs(a - b) <= Math.max(rel * Math.max(Math.abs(a), Math.abs(b)), abs);
   const date = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || "")); if (!m) return null; const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])); return d.getUTCMonth() === +m[2] - 1 ? d : null; };
   function tradingDays(a, b) { let n = 0; for (let d = new Date(a.getTime() + 864e5); d <= b; d = new Date(d.getTime() + 864e5)) if (d.getUTCDay() % 6) n++; return n; }
 
@@ -187,11 +194,13 @@
     const rawIn = truthy(k.inputs) ? k.inputs : {}, rawOut = truthy(k.outputs) ? k.outputs : {};
     add("inputs is an object", isDict(rawIn), pyType(rawIn));
     add("outputs is an object", isDict(rawOut), pyType(rawOut));
-    const inputs = isDict(rawIn) ? rawIn : {}, outputs = isDict(rawOut) ? rawOut : {}, unknown = new Set(list(k.unknown));
+    const inputs = isDict(rawIn) ? rawIn : {}, outputs = isDict(rawOut) ? rawOut : {}, unknown = new Set(asList(k.unknown).map(pyStr));
     const asOf = date(k.as_of);
     add("as_of date present", asOf !== null);
-    const subj = k.subject || {};
-    add("identity: company, ticker, exchange and share class given", ["company", "ticker", "exchange", "share_class"].every((f) => String(subj[f] || "").trim()));
+    const rawSubj = truthy(k.subject) ? k.subject : {};
+    add("subject is an object", isDict(rawSubj), pyType(rawSubj));
+    const subj = isDict(rawSubj) ? rawSubj : {};
+    add("identity: company, ticker, exchange and share class given", ["company", "ticker", "exchange", "share_class"].every((f) => pyStr(truthy(subj[f]) ? subj[f] : "").trim()));
     const input = (n) => (Object.hasOwn(inputs, n) && isDict(inputs[n]) && isNum(inputs[n].value)) ? inputs[n].value : null;
     for (const [name, v] of Object.entries(inputs)) {
       if (!v || typeof v !== "object" || Array.isArray(v)) { add("input " + name + " is an object", false); continue; }
@@ -200,34 +209,33 @@
       add(name + ": has a source", !!String(v.source || "").trim());
       add(name + ": has an as-of date", date(v.as_of) !== null);
     }
-    add("sources are listed", truthy(k.sources));
-    const flagged = (...words) => { const t = list(k.flags).map(pyStr).join(" ").toLowerCase(); return words.every((w) => t.includes(w.toLowerCase())); };
+    add("sources are listed", asList(k.sources).length > 0);
+    const flagged = (...words) => { const t = asList(k.flags).map(pyStr).join(" ").toLowerCase(); return words.every((w) => t.includes(w.toLowerCase())); };
     const p = isDict(inputs.price) ? inputs.price : null;
     if (p && date(p.as_of) && asOf && (p.basis || "last close") !== "offer midpoint") {
       const lag = tradingDays(date(p.as_of), asOf);
       if (lag > 1) add("stale price is flagged", flagged("stale"), "price is " + lag + " trading days old");
     }
-    const price = input("price"), shares = input("diluted_shares"), mc = isNum(outputs.market_cap) ? outputs.market_cap : null;
+    const price = input("price"), shares = input("diluted_shares"), mc = plainNumber(outputs.market_cap);
     if (price !== null && shares !== null) add("market cap = price x fully diluted shares", close(mc, price * shares));
     else if (mc !== null) add("market cap has both inputs", false);
-    const ev = isNum(outputs.enterprise_value) ? outputs.enterprise_value : null, debt = input("debt"), cash = input("cash");
+    const ev = plainNumber(outputs.enterprise_value), debt = input("debt"), cash = input("cash");
     if (mc !== null && debt !== null && cash !== null) add("EV = market cap + debt + preferred + minority interest - cash", close(ev, mc + debt + (input("preferred") || 0) + (input("minority_interest") || 0) - cash));
     else if (ev !== null) add("EV has its inputs", false);
     const values = Object.assign({}, ...Object.keys(inputs).map((n) => ({ [n]: input(n) })), { market_cap: mc, enterprise_value: ev });
-    const look = (x) => typeof x === "string" && Object.hasOwn(values, x) ? values[x] : null;
-    const allMultiples = list(outputs.multiples), multiples = allMultiples.filter(isDict);
-    add("every multiple is an object", multiples.length === allMultiples.length);
+    const listed = asList(outputs.multiples), multiples = listed.filter(isDict);
+    add("every multiple is an object", multiples.length === listed.length);
     for (const m of multiples) {
-      const n = look(m.numerator), d = look(m.denominator), val = isNum(m.value) ? m.value : null;
+      const n = named(values, m.numerator), d = named(values, m.denominator), val = plainNumber(m.value);
       if (n == null || d == null || d === 0) add("multiple " + pyStr(m.name) + ": inputs present", false);
       else add("multiple " + pyStr(m.name) + " recomputes", close(val, n / d, 0.01));
     }
-    for (const seg of list(k.segments).filter(isDict)) {
-      const total = look(seg.total), parts = list(seg.parts).map((x) => isDict(x) && isNum(x.value) ? x.value : null);
+    for (const seg of asList(k.segments).filter(isDict)) {
+      const total = named(values, seg.total), parts = asList(seg.parts).map((x) => isDict(x) ? plainNumber(x.value) : null);
       if (total != null && parts.length && !parts.includes(null)) add("segments add up to " + pyStr(seg.total), close(parts.reduce((a, b) => a + b, 0), total, 0.01));
     }
     for (const m of multiples) {
-      const periods = [m.numerator, m.denominator].filter((x) => typeof x === "string" && Object.hasOwn(inputs, x) && isDict(inputs[x])).map((x) => String(inputs[x].period || ""));
+      const periods = [m.numerator, m.denominator].filter((x) => isDict(named(inputs, x))).map((x) => pyStr(truthy(inputs[x].period) ? inputs[x].period : ""));
       const kinds = new Set();
       for (const per of periods.concat([String(m.name || "")])) for (const w of ["LTM", "NTM", "FY"]) if (new RegExp("\\b" + w).test(per.toUpperCase())) kinds.add(w);
       add("multiple " + pyStr(m.name) + ": one kind of period", kinds.size <= 1);
@@ -240,7 +248,7 @@
       if (x !== null && rev && !(x / rev >= -1 && x / rev <= 1)) add(name + " margin outside -100%..100% is flagged", flagged("outlier"));
     }
     const scen = k.scenarios, rating = k.rating;
-    add("rating is one of the four", RATINGS.has(rating));
+    add("rating is one of the four", typeof rating === "string" && RATINGS.has(rating), pyStr(rating));
     if (rating === "NOT RATED") add("NOT RATED has no scenarios", !truthy(scen));
     else if (isDict(scen)) {
       const cases = ["bull", "base", "bear"];
@@ -252,11 +260,11 @@
       else {
         const sum = probs.bull + probs.base + probs.bear;
         add("probabilities add up to 100%", Math.abs(sum - 100) < 0.01);
-        add("probabilities in 5% steps", cases.every((c) => Math.abs(probs[c] / 5 - Math.round(probs[c] / 5)) < 1e-9));
+        add("probabilities in 5% steps", cases.every((c) => Math.abs(probs[c] / 5 - Math.round(probs[c] / 5)) < ABS_TOL));
         add("bear < base < bull", vals.bear < vals.base && vals.base < vals.bull);
         const want = cases.reduce((a, c) => a + vals[c] * probs[c] / 100, 0);
-        add("PWV matches the probabilities and values", close(isNum(scen.pwv) ? scen.pwv : null, want));   // from the checked numbers, not the raw text
-        const ref = isNum(scen.reference_price) ? scen.reference_price : null, er = isNum(scen.expected_return_pct) ? scen.expected_return_pct : null;
+        add("PWV matches the probabilities and values", close(plainNumber(scen.pwv), want));   // from the checked numbers, not the raw text
+        const ref = plainNumber(scen.reference_price), er = plainNumber(scen.expected_return_pct);
         if (ref) {
           add("expected return = PWV / reference price - 1", er !== null && Math.abs(er - 100 * (want / ref - 1)) < 0.5);
           for (const c of cases) if (vals[c] > 5 * ref || vals[c] < ref / 5) add(c + " value beyond 5x / one-fifth of the price is flagged", flagged("outlier"));
@@ -269,9 +277,9 @@
         const ipo = k.ipo_ratings;
         if (isDict(ipo)) {
           add("Participate only with an Overweight rating", (ipo.at_offer === "Participate") === (rating === "Overweight"));
-          if (ipo.aftermarket === "Buy below") add("buy-below = PWV / 1.15", close(isNum(ipo.buy_below) ? ipo.buy_below : null, want / 1.15, 0.01));
+          if (ipo.aftermarket === "Buy below") add("buy-below = PWV / " + BUY_BELOW_DIVISOR, close(plainNumber(ipo.buy_below), want / BUY_BELOW_DIVISOR, 0.01));
         }
-        const stop = isNum(k.stop_working_price) ? k.stop_working_price : null;
+        const stop = plainNumber(k.stop_working_price);
         add("a rating comes with a stop-working price", stop !== null);
         if (stop !== null && ref) add("stop-working price below the reference price", stop < ref);
       }
@@ -288,7 +296,7 @@
   }
 
   function expectedRating(er, conviction) {     // verify.expected_rating
-    if (er >= OVERWEIGHT && CONVICTION_OK.has(conviction)) return "Overweight";
+    if (er >= OVERWEIGHT && typeof conviction === "string" && CONVICTION_OK.has(conviction)) return "Overweight";
     if (er <= UNDERWEIGHT) return "Underweight";
     return "Equal-weight";
   }
