@@ -49,6 +49,7 @@ LIVE_BYTES = 150_000            # what the live scorer reads of a filing: the co
 COVERED = 0.6                   # a year counts as well covered when this share of its IPOs still has prices
 BOOTSTRAP = 1000                # resamples for each confidence interval
 CURSE_K = (2, 5, 10)            # how steeply a retail allocation shrinks as a deal's demand grows
+OFFER_BAND = (0.5, 2.0)         # an offer below half the filed range's low or above twice its high is a misread
 FEATURES = ["revision", "above_range", "below_range", "no_range", "log_proceeds", "log_price", "bank_share",
             "tech", "biotech", "finance", "foreign", "spy_20d", "heat_30d", "deals_30d"]
 
@@ -59,10 +60,30 @@ class Sealed(Exception):
     """Raised when development code asks for the holdout."""
 
 
+def priced(r):
+    """An IPO with an offer price and a first day's open and close."""
+    return bool(r.get("offer_price") and r.get("prices") and r["prices"].get("open") and r["prices"].get("close"))
+
+
+def offer_off_range(r):
+    """True when the offer is far outside the price range filed before it (OFFER_BAND): a parser's misread, caught
+    from pre-listing facts alone, unlike ipo_data's suspect flag, which reads the first day's open."""
+    rng, offer = r.get("range"), r.get("offer_price")
+    return bool(rng and offer and not OFFER_BAND[0] * rng[0] <= offer <= OFFER_BAND[1] * rng[1])
+
+
+def excluded(rows):
+    """The priced IPOs usable() leaves out, by reason. Suspect prices (an open outside 0.5-4x the offer) are judged
+    on the listing day itself, so the report states how many there are and how they traded: the selection is
+    visible rather than silent."""
+    p = [r for r in rows if priced(r)]
+    return {"suspect prices": [r for r in p if r["prices"].get("suspect")],
+            "offer outside the filed range": [r for r in p if not r["prices"].get("suspect") and offer_off_range(r)]}
+
+
 def usable(rows):
-    """IPOs with an offer price and trustworthy first-day prices."""
-    return [r for r in rows if r.get("offer_price") and r.get("prices") and not r["prices"].get("suspect")
-            and r["prices"].get("open") and r["prices"].get("close")]
+    """IPOs with an offer price and trustworthy first-day prices, whose offer agrees with the filed range."""
+    return [r for r in rows if priced(r) and not r["prices"].get("suspect") and not offer_off_range(r)]
 
 
 def split(rows, final=False):
@@ -479,6 +500,12 @@ def drop_one(rows, market, folds_base):
 
 # ----------------------------------------------------------------------------- 3. trading: slippage, winner's curse
 
+def top_picks(fold, top=0.2):
+    """A fold's IPOs with the highest predicted pop: the top `top` share, at least one."""
+    ranked = sorted(zip(fold["scores"], fold["rows"]), key=lambda t: -t[0])
+    return [r for _, r in ranked[:max(1, int(len(fold["rows"]) * top))]]
+
+
 def at_open(folds, slippage, top=0.2):
     """Buying at the first day's open and selling at that day's close, or 21 trading days on, with `slippage`
     lost on the way in and again on the way out. Every IPO, and the model's top fifth by predicted pop."""
@@ -489,7 +516,7 @@ def at_open(folds, slippage, top=0.2):
         return (exit_px * (1 - slippage)) / (r["prices"]["open"] * (1 + slippage)) - 1
     out = {}
     for name, pick in (("every IPO", lambda f: f["rows"]),
-                       ("model's top fifth", lambda f: [r for _, r in sorted(zip(f["scores"], f["rows"]), key=lambda t: -t[0])[:max(1, int(len(f["rows"]) * top))]])):
+                       ("model's top fifth", lambda f: top_picks(f, top))):
         picked = [r for f in folds for r in pick(f)]
         for exit_key, label in (("close", "day 1"), ("close_21", "21 days")):
             rs = [x for x in (ret(r, exit_key) for r in picked) if x is not None]
@@ -524,7 +551,7 @@ def winners_curse(folds, top=0.2):
     against the return on what would actually have been allocated, for every IPO and for the model's picks."""
     out = {}
     for name, pick in (("every IPO", lambda f: f["rows"]),
-                       ("model's top fifth", lambda f: [r for _, r in sorted(zip(f["scores"], f["rows"]), key=lambda t: -t[0])[:max(1, int(len(f["rows"]) * top))]])):
+                       ("model's top fifth", lambda f: top_picks(f, top))):
         picked = [r for f in folds for r in pick(f)]
         rets = [first_day(r) for r in picked]
         row = {"n": len(rets), "as asked": statistics.fmean(rets)}
@@ -637,6 +664,7 @@ def spy_closes():
         res = json.loads(r.read())["chart"]["result"][0]
     closes = {dt.datetime.fromtimestamp(t, dt.timezone.utc).date().isoformat(): c
               for t, c in zip(res["timestamp"], res["indicators"]["quote"][0]["close"]) if c}
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"fetched": dt.date.today().isoformat(), "closes": closes}), encoding="utf-8")
     return closes
 
@@ -649,32 +677,33 @@ def num(x, d=3):
     return "n/a" if x is None or (isinstance(x, float) and math.isnan(x)) else f"{x:.{d}f}"
 
 
-def report(final=False, again=False):
-    raw = ipo_data.load()
-    rows = usable(raw)
-    dev, hold = split(rows, final)
-    spy20 = spy_returns(spy_closes())
-    market = market_features(rows if final else dev, spy20)
-    lines = [f"# IPO evaluation, {dt.date.today().isoformat()}", "",
-             f"{len(raw)} IPOs with a final prospectus since {ipo_data.FIRST_YEAR}; {len(rows)} with an offer price and trustworthy first-day "
-             f"prices; a pop is a first-day close {100 * POP:.0f}% or more above the offer.", ""]
-
-    # coverage and survivorship
-    lines += ["## Coverage (survivorship)", "", "| Year | IPOs | priced | share |", "|---|---|---|---|"]
-    years = sorted({r["prospectus_date"][:4] for r in raw})
-    for y in years:
+def coverage_lines(raw, rows):
+    """Coverage by year (survivorship), and what usable() left out of the priced IPOs, with how they traded."""
+    lines = ["## Coverage (survivorship)", "", "| Year | IPOs | priced | share |", "|---|---|---|---|"]
+    for y in sorted({r["prospectus_date"][:4] for r in raw}):
         n = sum(r["prospectus_date"][:4] == y for r in raw)
         k = sum(r["prospectus_date"][:4] == y for r in rows)
         lines.append(f"| {y} | {n} | {k} | {100 * k / n:.0f}% |")
     lines += ["", "An IPO with no prices was delisted (or its ticker changed): the failures leave the sample, which flatters "
               "later returns more than first days.", ""]
+    lines += ["## Excluded from the sample", "", "| Reason | IPOs | median first day | mean first day |", "|---|---|---|---|"]
+    for reason, rs in excluded(raw).items():
+        fd = [first_day(r) for r in rs]
+        lines.append(f"| {reason} | {len(rs)} | {pct(statistics.median(fd) if fd else None)} | "
+                     f"{pct(statistics.fmean(fd) if fd else None)} |")
+    lines += ["", "Suspect prices are an open below half the offer or above four times it, so they are judged on the listing "
+              "day itself; they are left out because they are almost always a rescaled history or a misread offer, and "
+              f"counted here so the selection is visible. An offer outside {OFFER_BAND[0]:g}x the range's low to "
+              f"{OFFER_BAND[1]:g}x its high is caught from the filings alone.", ""]
+    return lines
 
-    # 1. walk-forward
-    folds = walk_forward(dev, market)
-    lines += ["## 1. Walk-forward by year", "", "Each year predicted by a model fitted only on the years before it (the "
-              "penalty fixed in advance, the F1 threshold chosen on the training years).", "",
-              "| Test year | IPOs | pops | base rate | PR-AUC | ROC-AUC | F1 | precision | recall | Brier skill | p (PR-AUC) |",
-              "|---|---|---|---|---|---|---|---|---|---|---|"]
+
+def walk_forward_lines(folds, raw, rows):
+    """The fixed walk-forward's table and pooled scores: (lines, pooled scorecard, PR-AUC interval)."""
+    lines = ["## 1. Walk-forward by year", "", "Each year predicted by a model fitted only on the years before it (the "
+             "penalty fixed in advance, the F1 threshold chosen on the training years).", "",
+             "| Test year | IPOs | pops | base rate | PR-AUC | ROC-AUC | F1 | precision | recall | Brier skill | p (PR-AUC) |",
+             "|---|---|---|---|---|---|---|---|---|---|---|"]
     for f in folds:
         c = scorecard(f["scores"], f["ys"], f["threshold"], f["base_rate"])
         lines.append(f"| {f['year']} | {c['n']} | {c['pops']} | {100 * c['base_rate']:.1f}% | {num(c['pr_auc'])} | {num(c['roc_auc'])} | "
@@ -688,6 +717,7 @@ def report(final=False, again=False):
               f"{share(sum(y), len(y))} (what a random ranking scores), a lift of {allc['pr_auc'] / allc['base_rate']:.2f}x "
               f"({ap_lo / allc['base_rate']:.2f}x to {ap_hi / allc['base_rate']:.2f}x); {p_text(permutation_p(s, y))}; "
               f"ROC-AUC {num(allc['roc_auc'])} (95% CI {num(roc_lo)} to {num(roc_hi)}); F1 {num(allc['f1'])}.", ""]
+    years = sorted({r["prospectus_date"][:4] for r in raw})
     covered = {yr for yr in years if sum(r["prospectus_date"][:4] == yr for r in rows) >= COVERED * sum(r["prospectus_date"][:4] == yr for r in raw)}
     fc = [f for f in folds if str(f["year"]) in covered]
     if fc:
@@ -697,15 +727,18 @@ def report(final=False, again=False):
                   f"{share(sum(y3), len(y3))}, ROC-AUC {num(roc_auc(s3, y3))}.", ""]
     else:
         lines += [f"No test year has prices for {100 * COVERED:.0f}% of its IPOs.", ""]
+    return lines, allc, (ap_lo, ap_hi)
 
-    # re-optimised every year
+
+def reoptimised_lines(dev, market, folds, allc, ci):
+    """The walk-forward with the penalty and window re-chosen each year, beside the fixed one."""
     reopt = walk_forward(dev, market, settings=choose_settings(market))
     s4, y4, _ = pooled(reopt)
-    lines += ["## 1. Walk-forward, re-optimised each year", "",
-              f"Each January the penalty (from {', '.join(str(x) for x in L2_GRID)}) and the training window (every earlier year, "
-              "or the last three) are chosen by predicting the last two training years from the years before them; "
-              "the test year plays no part.", "",
-              "| Test year | chosen penalty | window | PR-AUC re-optimised | PR-AUC fixed |", "|---|---|---|---|---|"]
+    lines = ["## 1. Walk-forward, re-optimised each year", "",
+             f"Each January the penalty (from {', '.join(str(x) for x in L2_GRID)}) and the training window (every earlier year, "
+             "or the last three) are chosen by predicting the last two training years from the years before them; "
+             "the test year plays no part.", "",
+             "| Test year | chosen penalty | window | PR-AUC re-optimised | PR-AUC fixed |", "|---|---|---|---|---|"]
     fixed_by_year = {f["year"]: f for f in folds}
     for f in reopt:
         fx = fixed_by_year.get(f["year"])
@@ -714,10 +747,13 @@ def report(final=False, again=False):
                      f"{num(average_precision(f['scores'], f['ys']))} | {num(average_precision(fx['scores'], fx['ys'])) if fx else 'n/a'} |")
     r_lo, r_hi = bootstrap_ci(s4, y4)
     lines += ["", f"All test years: re-optimised PR-AUC {num(average_precision(s4, y4))} (95% CI {num(r_lo)} to {num(r_hi)}) against "
-              f"fixed {num(allc['pr_auc'])} ({num(ap_lo)} to {num(ap_hi)}).", ""]
+              f"fixed {num(allc['pr_auc'])} ({num(ci[0])} to {num(ci[1])}).", ""]
+    return lines
 
-    # regimes
-    lines += ["## 1. Market regimes", "", "| Regime | IPOs | base rate | PR-AUC (95% CI) | lift over base | ROC-AUC | F1 |", "|---|---|---|---|---|---|---|"]
+
+def regime_lines(folds, spy):
+    """Scores by calendar regime, and by SPY's state on each listing day."""
+    lines = ["## 1. Market regimes", "", "| Regime | IPOs | base rate | PR-AUC (95% CI) | lift over base | ROC-AUC | F1 |", "|---|---|---|---|---|---|---|"]
     for name, span in REGIMES.items():
         s2, y2, f2 = pooled(folds, span)
         if not y2 or not sum(y2):
@@ -726,7 +762,6 @@ def report(final=False, again=False):
         lo, hi = bootstrap_ci(s2, y2)
         lines.append(f"| {name} | {c['n']} | {share(c['pops'], c['n'])} | {num(c['pr_auc'])} ({num(lo)} to {num(hi)}) | "
                      f"{num(c['pr_auc'] / c['base_rate'], 2)}x | {num(c['roc_auc'])} | {num(c['f1'])} |")
-    spy = spy_closes()
     lab = [(spy_regime(spy, r["prices"]["listing_date"]), sc, yv) for f in folds for r, sc, yv in zip(f["rows"], f["scores"], f["ys"])]
     for reg in ("bull", "drawdown", "sideways", "ordinary"):
         sc = [x[1] for x in lab if x[0] == reg]
@@ -738,73 +773,75 @@ def report(final=False, again=False):
         else:
             lines.append(f"| SPY {reg} on the listing day | {len(yv)} | too few to score | | | | |")
     lines.append("")
+    return lines
 
-    # holdout: scored once; later runs show the result of record
+
+def holdout_lines(dev, hold, market, final, again):
+    """The sealed holdout: scored once (and logged) with --final; later runs show the result of record.
+    Returns (lines, final): final is False when the recorded result was shown instead of a new score."""
     looks = [json.loads(x) for x in HOLDOUT_LOG.read_text(encoding="utf-8").splitlines() if x.strip()] if HOLDOUT_LOG.exists() else []
     if final and looks and not again:
         rec = looks[0]
-        lines += ["## 1. Sealed holdout (the result of record)", "", f"Scored once on {rec['run'][:10]}: {rec['text']} "
-                  f"Looked at {len(looks)} time(s); `--final --again` scores it again and logs another look.", ""]
-        final = False
-        recorded = True
+        return ["## 1. Sealed holdout (the result of record)", "", f"Scored once on {rec['run'][:10]}: {rec['text']} "
+                f"Looked at {len(looks)} time(s); `--final --again` scores it again and logs another look.", ""], False
+    if not final:
+        return ["## 1. Sealed holdout", "", f"Not scored: IPOs listed from {HOLDOUT_FROM} stay sealed until `--final`.", ""], False
+    model, banks, t, base = fit_year(dev, market)
+    hs = [model.prob(features(r, market, banks)) for r in hold]
+    hy = [int(popped(first_day(r))) for r in hold]
+    lines = ["## 1. Sealed holdout", ""]
+    if hy and sum(hy):
+        c = scorecard(hs, hy, t, base)
+        text = (f"{c['n']} IPOs listed from {HOLDOUT_FROM}, never used while building: PR-AUC {num(c['pr_auc'])} against a "
+                f"base rate of {pct(c['base_rate'], 0)} (p = {num(permutation_p(hs, hy), 3)}), ROC-AUC {num(c['roc_auc'])}, "
+                f"F1 {num(c['f1'])}.")
+        lines += [text, f"This is look number {len(looks) + 1}.", ""]
+        HOLDOUT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with HOLDOUT_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"run": dt.datetime.now().isoformat(timespec="seconds"), "text": text}) + "\n")
     else:
-        recorded = False
-    if final:
-        train = dev
-        model, banks, t, base = fit_year(train, market)
-        hs = [model.prob(features(r, market, banks)) for r in hold]
-        hy = [int(popped(first_day(r))) for r in hold]
-        lines += ["## 1. Sealed holdout", ""]
-        if hy and sum(hy):
-            c = scorecard(hs, hy, t, base)
-            text = (f"{c['n']} IPOs listed from {HOLDOUT_FROM}, never used while building: PR-AUC {num(c['pr_auc'])} against a "
-                    f"base rate of {pct(c['base_rate'], 0)} (p = {num(permutation_p(hs, hy), 3)}), ROC-AUC {num(c['roc_auc'])}, "
-                    f"F1 {num(c['f1'])}.")
-            lines += [text, f"This is look number {len(looks) + 1}.", ""]
-            HOLDOUT_LOG.parent.mkdir(exist_ok=True)
-            with HOLDOUT_LOG.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps({"run": dt.datetime.now().isoformat(timespec="seconds"), "text": text}) + "\n")
-        else:
-            lines += ["Too few holdout IPOs with prices to score.", ""]
-    elif not recorded:
-        lines += ["## 1. Sealed holdout", "", f"Not scored: IPOs listed from {HOLDOUT_FROM} stay sealed until `--final`.", ""]
+        lines += ["Too few holdout IPOs with prices to score.", ""]
+    return lines, True
 
-    # 2. leakage
+
+def leakage_lines(dev, spy20):
     audit = leakage_audit(dev, lambda rs: _all_features(rs, spy20))
-    lines += ["## 2. Leakage audit", "",
-              f"- Ranges from a filing on or after the listing day: {len(audit['range_after_listing'])}, of which the features use "
-              f"{len(audit['range_after_listing_used'])} (they are treated as having no range).",
-              f"- Final prospectuses filed more than five days after listing: {len(audit['prospectus_late'])}.",
-              f"- Perturbation: rewriting an IPO's trading changed {len(audit['leaks'])} earlier or same-day IPOs' features.",
-              f"- The planted canary (a feature that reads the first day) was {'caught' if audit['canary_caught'] else 'MISSED'}.",
-              "- League tables (bank share) are rebuilt from each fold's training years only.", ""]
+    return ["## 2. Leakage audit", "",
+            f"- Ranges from a filing on or after the listing day: {len(audit['range_after_listing'])}, of which the features use "
+            f"{len(audit['range_after_listing_used'])} (they are treated as having no range).",
+            f"- Final prospectuses filed more than five days after listing: {len(audit['prospectus_late'])}.",
+            f"- Perturbation: rewriting an IPO's trading changed {len(audit['leaks'])} earlier or same-day IPOs' features.",
+            f"- The planted canary (a feature that reads the first day) was {'caught' if audit['canary_caught'] else 'MISSED'}.",
+            "- League tables (bank share) are rebuilt from each fold's training years only.", ""]
 
-    # 2. sensitivity
+
+def sensitivity_lines(dev, market, folds):
     base, perm = sensitivity(folds)
     _, drop = drop_one(dev, market, folds)
-    lines += ["## 2. Feature sensitivity", "", f"PR-AUC over the test years: {num(base)}. Loss when a feature is shuffled "
-              "(models kept) or dropped (every year refitted); a pure-noise feature is the floor.", "",
-              "| Feature | shuffled | dropped |", "|---|---|---|"]
+    lines = ["## 2. Feature sensitivity", "", f"PR-AUC over the test years: {num(base)}. Loss when a feature is shuffled "
+             "(models kept) or dropped (every year refitted); a pure-noise feature is the floor.", "",
+             "| Feature | shuffled | dropped |", "|---|---|---|"]
     for k in sorted(FEATURES, key=lambda k: -perm[k]):
         lines.append(f"| {k} | {perm[k]:+.4f} | {drop[k]:+.4f} |")
-    lines += [f"| pure noise, added and refitted (the floor) | n/a | {drop['noise (added)']:+.4f} |", ""]
+    return lines + [f"| pure noise, added and refitted (the floor) | n/a | {drop['noise (added)']:+.4f} |", ""]
 
-    # 2. imbalance
-    lines += ["## 2. Class imbalance", "", f"Over the test years {allc['pops']} of {allc['n']} IPOs popped ({100 * allc['base_rate']:.1f}%). "
-              f"Accuracy {100 * allc['accuracy']:.1f}% looks fine until set beside always saying no: {100 * allc['accuracy_always_no']:.1f}%. "
-              f"PR-AUC {num(allc['pr_auc'])} (random: {num(allc['base_rate'])}), F1 {num(allc['f1'])}, precision "
-              f"{num(allc['precision'])}, recall {num(allc['recall'])}, Brier skill {num(allc['brier_skill'])}.", ""]
 
-    # 3. slippage
-    lines += ["## 3. Slippage, buying at the open", "", "| Picks | exit | slippage | n | mean | median | win rate |", "|---|---|---|---|---|---|---|"]
+def imbalance_lines(allc):
+    return ["## 2. Class imbalance", "", f"Over the test years {allc['pops']} of {allc['n']} IPOs popped ({100 * allc['base_rate']:.1f}%). "
+            f"Accuracy {100 * allc['accuracy']:.1f}% looks fine until set beside always saying no: {100 * allc['accuracy_always_no']:.1f}%. "
+            f"PR-AUC {num(allc['pr_auc'])} (random: {num(allc['base_rate'])}), F1 {num(allc['f1'])}, precision "
+            f"{num(allc['precision'])}, recall {num(allc['recall'])}, Brier skill {num(allc['brier_skill'])}.", ""]
+
+
+def trading_lines(folds):
+    """Slippage buying at the open, the break-even friction, and the winner's curse buying at the offer."""
+    lines = ["## 3. Slippage, buying at the open", "", "| Picks | exit | slippage | n | mean | median | win rate |", "|---|---|---|---|---|---|---|"]
     for sl in FRICTION:
         for (name, label), v in at_open(folds, sl).items():
             lines.append(f"| {name} | {label} | {100 * sl:.2f}% each way | {v['n']} | {pct(v['mean'], 2)} | {pct(v['median'], 2)} | {100 * v['win_rate']:.1f}% |")
     be1, be21 = break_even_friction(folds), break_even_friction(folds, "close_21")
     lines += ["", f"Break-even friction, each way, for buying every IPO at the open: {100 * be1:.2f}% held to the first close, "
               f"{100 * be21:.2f}% held 21 days (0 means it loses money before any cost).", ""]
-
-    # 3. winner's curse
     curse = winners_curse(folds)
     lines += ["## 3. Winner's curse, buying at the offer", "", "Return to the first close on what was asked for, and on what "
               "a retail book would have filled (all of a flop, less of a hot deal).", "",
@@ -814,22 +851,44 @@ def report(final=False, again=False):
         lines.append(f"| {name} | {v['n']} | {pct(v['as asked'], 2)} | " +
                      " | ".join(f"{pct(v[f'allocated k={k}'], 2)} ({100 * v[f'filled k={k}']:.1f}%)" for k in CURSE_K) + " |")
     lines.append("")
+    return lines
 
-    # 3. stress
+
+def stress_lines(dev, market):
     model, banks, _, _ = fit_year(dev, market)
     st = stress(model, banks)
-    lines += ["## 3. Live-feed stress at the open", "",
-              f"{st['events']} synthetic events, half broken (truncated, empty, junk markup, 2 MB, wrong types, garbled "
-              f"indications): {st['ok']} scored, {st['unknown']} returned \"unknown\", {st['errors']} crashed. Latency p50 "
-              f"{st['p50_ms']:.2f} ms, p99 {st['p99_ms']:.2f} ms, max {st['max_ms']:.1f} ms (budget {st['budget_ms']:.0f} ms). "
-              f"{st['burst']} at once on threads: {st['burst_wall_ms']:.0f} ms wall.", ""]
+    return ["## 3. Live-feed stress at the open", "",
+            f"{st['events']} synthetic events, half broken (truncated, empty, junk markup, 2 MB, wrong types, garbled "
+            f"indications): {st['ok']} scored, {st['unknown']} returned \"unknown\", {st['errors']} crashed. Latency p50 "
+            f"{st['p50_ms']:.2f} ms, p99 {st['p99_ms']:.2f} ms, max {st['max_ms']:.1f} ms (budget {st['budget_ms']:.0f} ms). "
+            f"{st['burst']} at once on threads: {st['burst_wall_ms']:.0f} ms wall.", ""]
+
+
+def report(final=False, again=False):
+    raw = ipo_data.load()
+    rows = usable(raw)
+    dev, hold = split(rows, final)
+    spy = spy_closes()
+    spy20 = spy_returns(spy)
+    market = market_features(rows if final else dev, spy20)
+    lines = [f"# IPO evaluation, {dt.date.today().isoformat()}", "",
+             f"{len(raw)} IPOs with a final prospectus since {ipo_data.FIRST_YEAR}; {len(rows)} with an offer price and trustworthy first-day "
+             f"prices; a pop is a first-day close {100 * POP:.0f}% or more above the offer.", ""]
+    lines += coverage_lines(raw, rows)
+    folds = walk_forward(dev, market)
+    wf, allc, ci = walk_forward_lines(folds, raw, rows)
+    lines += wf + reoptimised_lines(dev, market, folds, allc, ci) + regime_lines(folds, spy)
+    hl, final = holdout_lines(dev, hold, market, final, again)
+    lines += hl + leakage_lines(dev, spy20) + sensitivity_lines(dev, market, folds) + imbalance_lines(allc)
+    lines += trading_lines(folds) + stress_lines(dev, market)
 
     out = ROOT / "bench_runs" / f"ipo_eval_{dt.date.today().isoformat()}{'_final' if final else ''}.md"
     out.parent.mkdir(exist_ok=True)
     out.write_text("\n".join(lines), encoding="utf-8")
     print("\n".join(lines))
     print(f"\nwritten to {out}")
+    return out
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - the command line entry; report() is tested
     report(final="--final" in sys.argv, again="--again" in sys.argv)

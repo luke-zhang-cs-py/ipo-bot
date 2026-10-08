@@ -38,12 +38,7 @@ def returns(xs):
     return [b / a - 1 for a, b in zip(xs, xs[1:])]
 
 
-def drawdown(xs):
-    peak, worst = xs[0], 0.0
-    for v in xs:
-        peak = max(peak, v)
-        worst = min(worst, v / peak - 1)
-    return worst
+drawdown = bm.max_drawdown           # the worst fall from a running high, as the benchmark measures it
 
 
 def boot(ra, rs, stat, n=1000, seed=3):
@@ -76,7 +71,7 @@ def accordance(account, spy_close, spy_hist):
     sp = [spy_close[d] for d in days]
     ra, rs = returns(eq), returns(sp)
     var = statistics.pvariance(rs) if len(rs) > 1 else 0.0
-    beta = (statistics.fmean((x - statistics.fmean(ra)) * (y - statistics.fmean(rs)) for x, y in zip(ra, rs)) / var) if var else float("nan")
+    beta = _beta(ra, rs) if var else float("nan")
     corr = statistics.correlation(ra, rs) if len(ra) > 2 and statistics.pstdev(ra) and statistics.pstdev(rs) else float("nan")
     te = statistics.pstdev([x - y for x, y in zip(ra, rs)]) * (252 ** 0.5) if len(ra) > 1 else float("nan")
     hist_days = sorted(spy_hist)
@@ -142,12 +137,17 @@ def pct(x, d=2):
     return "n/a" if x is None or x != x else f"{100 * x:+.{d}f}%"
 
 
+def level(x):
+    """A share (how invested, a fill rate) as a percentage; n/a when there were no days or no orders to measure."""
+    return "n/a" if x is None or x != x else f"{100 * x:.1f}%"
+
+
 def rng_text(pair, fmt):
     return f" (95% CI {fmt(pair[0])} to {fmt(pair[1])})" if pair else ""
 
 
 def render(e):
-    reg = " | ".join(f"{k}: {100 * v[0]:.1f}% ({v[1]} d)" for k, v in sorted(e["invested_by_regime"].items()))
+    reg = " | ".join(f"{k}: {level(v[0])} ({v[1]} d)" for k, v in sorted(e["invested_by_regime"].items()))
     return "\n".join([
         f"# Tracking: the paper bot against the market, {e['from']} to {e['to']}", "",
         f"Updated {e['run'][:16].replace('T', ' ')} UTC by `python evaluation/tracker.py`; every run is a line in `track.json`. "
@@ -161,20 +161,24 @@ def render(e):
         f"average daily return against SPY's {pct(e['excess_per_year'])} a year{rng_text(e.get('excess_ci'), pct)}. "
         "Intervals resample the days 1,000 times; an interval that spans zero is no evidence either way.", "",
         "## Trend accordance", "",
-        f"Invested on days SPY was above its 200-day average: {100 * e['invested_when_spy_above_200d']:.1f}% on average ({e['days_above_200d']} days); "
-        f"below it: {100 * e['invested_when_spy_below_200d']:.1f}% ({e['days_below_200d']} days). By regime: {reg}.", "",
+        f"Invested on days SPY was above its 200-day average: {level(e['invested_when_spy_above_200d'])} on average ({e['days_above_200d']} days); "
+        f"below it: {level(e['invested_when_spy_below_200d'])} ({e['days_below_200d']} days). By regime: {reg}.", "",
         "## Execution", "",
         f"{e['signals']} signals: " + ", ".join(f"{k} {v} ({100 * v / e['signals']:.1f}%)" for k, v in e["outcomes"].items()) +
-        f". Fill rate of planned shares {100 * e['fill_rate']:.1f}%; mean slippage from the signal's price {pct(e['mean_slippage'], 3)}; "
+        f". Fill rate of planned shares {level(e['fill_rate'])}; mean slippage from the signal's price {pct(e['mean_slippage'], 3)}; "
         f"{e['stops_hit']} stops hit.", "",
         f"Look-ahead check on the signal: {e['lookahead_found']} found in {e['lookahead_checked']} sampled days.", ""])
 
 
-if __name__ == "__main__":
-    for s in (sys.stdout,):
-        try:
-            s.reconfigure(encoding="utf-8")
-        except (AttributeError, ValueError):
-            pass
+def main():
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
     e = run()
     print(render(e))
+    return e
+
+
+if __name__ == "__main__":  # pragma: no cover - the command line entry; main() is tested
+    main()

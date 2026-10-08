@@ -154,6 +154,19 @@ def replay(data, days=10, log=None):
     return lines, account, exits
 
 
+def fills_text(d):
+    """The divergence report's fill rate and slippage in a sentence: orders planned but none filled have no
+    slippage to state."""
+    if d["fill_rate_of_planned_shares"] is None:
+        return "No orders were planned."
+    text = f"Fill rate of planned shares: {100 * d['fill_rate_of_planned_shares']:.1f}%; "
+    if d["mean_slippage_vs_signal"] is None:
+        return text + "nothing filled, so no slippage to measure."
+    return (text + f"mean slippage from the signal's price (yesterday's close to today's fill, so it includes the overnight "
+            f"gap): {100 * d['mean_slippage_vs_signal']:+.2f}%; worst {100 * d['worst_slippage_vs_signal']:+.2f}%; "
+            f"fees ${d['fees']:.2f}; median time per signal {d['median_latency_s'] * 1000:.1f} ms.")
+
+
 def main(argv):
     for s in (sys.stdout, sys.stderr):
         try:
@@ -182,10 +195,7 @@ def main(argv):
             f"(two weeks says nothing about skill; this run tests the plumbing).", "",
             "## Signals against executions", "", "| Outcome | count |", "|---|---|"]
     out += [f"| {k} | {v} |" for k, v in d["outcomes"].items()]
-    out += ["", f"Fill rate of planned shares: {100 * d['fill_rate_of_planned_shares']:.1f}%; mean slippage from the signal's price "
-            f"(yesterday's close to today's fill, so it includes the overnight gap): {100 * d['mean_slippage_vs_signal']:+.2f}%; "
-            f"worst {100 * d['worst_slippage_vs_signal']:+.2f}%; fees ${d['fees']:.2f}; median time per signal {d['median_latency_s'] * 1000:.1f} ms."
-            if d["fill_rate_of_planned_shares"] is not None else "No orders were planned.", ""]
+    out += ["", fills_text(d), ""]
     if d["warnings"]:
         out += ["Warnings: " + "; ".join(d["warnings"]), ""]
     out += ["## Stops hit", ""] + ([f"- {e['day']} {e['symbol']}: {e['shares']} shares at ${e['price']}, {e['pnl']:+,.2f}" for e in exits]
@@ -198,5 +208,5 @@ def main(argv):
     print(f"Saved to {path}; the full log is in forecasts/paper/")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - the command line entry; main() is tested
     main(sys.argv[1:])

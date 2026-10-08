@@ -30,7 +30,7 @@ import pandas as pd
 
 try:  # SciPy gives exact t-distribution p-values; fall back to a normal approximation without it.
     from scipy import stats as _sps
-except ImportError:  # pragma: no cover
+except ImportError:  # pragma: no cover  (scipy is in requirements; this keeps a bare install importable)
     _sps = None
 
 STORE_COLUMNS = ["available_at", "entity", "field", "value", "kind"]
@@ -498,7 +498,7 @@ def slice_comparison(joined: pd.DataFrame, candidate: str, opponent: str, by: st
         if len(c) and len(o):
             rows.append({by: key, "n": len(c), "candidate": brier(c["prob_up"], c["y"]),
                          "opponent": brier(o["prob_up"], o["y"])})
-    out = pd.DataFrame(rows)
+    out = pd.DataFrame(rows, columns=[by, "n", "candidate", "opponent"])     # columns even when no slice has both bots
     out["diff"] = out["candidate"] - out["opponent"]
     return out
 

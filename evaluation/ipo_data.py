@@ -106,7 +106,8 @@ class Sec:
     def head(self, url, limit=HEAD_BYTES):
         """The first `limit` bytes of a filing: the server ignores Range, so the read stops early instead.
         A busy server (503, 429) is retried after a pause."""
-        for attempt in range(4):
+        attempt = 0
+        while True:                    # four tries: the last failure is raised
             self._wait()
             req = urllib.request.Request(url, headers=self.headers)
             try:
@@ -115,7 +116,8 @@ class Sec:
             except urllib.error.HTTPError as e:
                 if e.code not in (429, 503) or attempt == 3:
                     raise
-                time.sleep(5 * (attempt + 1))
+            attempt += 1
+            time.sleep(5 * attempt)
 
 
 def prospectus_hits(sec, year):
@@ -211,13 +213,19 @@ def build_row(sec, hit):
     row["offer_price"] = offer
     row["listing_symbol"] = listing_symbol(text)
     row["prices"] = None
-    for symbol in dict.fromkeys(t for t in (row["listing_symbol"], hit["ticker"]) if t):
-        chart = yahoo_chart(symbol, hit["file_date"])
-        prices = first_days(chart, hit["file_date"], offer) if chart else None
-        if prices:
-            row["prices"], row["price_symbol"] = prices, symbol
-            break
+    row.update(price_history((row["listing_symbol"], hit["ticker"]), hit["file_date"], offer))
     return row
+
+
+def price_history(symbols, listing_hint, offer):
+    """{prices, price_symbol} from the first of `symbols` (the prospectus's own, then the SEC's ticker) whose Yahoo
+    history starts at this IPO; {} when none does."""
+    for symbol in dict.fromkeys(t for t in symbols if t):
+        chart = yahoo_chart(symbol, listing_hint)
+        prices = first_days(chart, listing_hint, offer) if chart else None
+        if prices:
+            return {"prices": prices, "price_symbol": symbol}
+    return {}
 
 
 def build(years=None):
@@ -275,12 +283,7 @@ def refresh():
             new = {**r, "file": hit["file"], "offer_price": offer, "shares": shares_offered(text), "lead_bank": lead_bank(text),
                    "listing_symbol": listing_symbol(text), "prices": None}
             new.pop("price_symbol", None)
-            for symbol in dict.fromkeys(t for t in (new["listing_symbol"], hit["ticker"]) if t):
-                chart = yahoo_chart(symbol, r["prospectus_date"])
-                prices = first_days(chart, r["prospectus_date"], offer) if chart else None
-                if prices:
-                    new["prices"], new["price_symbol"] = prices, symbol
-                    break
+            new.update(price_history((new["listing_symbol"], hit["ticker"]), r["prospectus_date"], offer))
             return new
         except Exception as e:
             return {**r, "refresh_error": str(e)}
@@ -326,8 +329,10 @@ def add_initial_ranges():
                 print(f"  {n}/{len(todo)}", flush=True)
 
 
-def load(path=OUT, dedupe=True):
-    """The IPO rows (skipped filings left out), oldest prospectus first."""
+def load(path=None, dedupe=True):
+    """The IPO rows (skipped filings left out), oldest prospectus first. `path` defaults to OUT as it is at the
+    call (not as it was at import), so refresh() and add_initial_ranges() read the file build() writes."""
+    path = path or OUT
     latest = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip():
@@ -360,6 +365,10 @@ def summary():
         print(f"{y}  {n:>4}  {p:>4} ({100 * p / n:.0f}%)  {g:>4} ({100 * g / n:.0f}%)")
 
 
-if __name__ == "__main__":
-    (summary() if "--summary" in sys.argv else refresh() if "--refresh" in sys.argv
-     else add_initial_ranges() if "--initial-ranges" in sys.argv else build())
+def main(argv):
+    (summary() if "--summary" in argv else refresh() if "--refresh" in argv
+     else add_initial_ranges() if "--initial-ranges" in argv else build())
+
+
+if __name__ == "__main__":  # pragma: no cover - the command line entry; main() is tested
+    main(sys.argv[1:])
