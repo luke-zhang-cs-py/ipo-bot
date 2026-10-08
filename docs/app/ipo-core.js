@@ -304,6 +304,7 @@
   // Each simulated path picks bull, base or bear by its probability, ends near that target (lognormal, spread by
   // half the volatility, mean exactly on the target) and gets there as a Brownian bridge with the full volatility.
   // So the paths' average ending is the PWV, and the bands show how wide the road is, not just where it ends.
+  const PROJECTION = Object.freeze({ paths: 2000, seed: 1 });   // the chart's defaults, also shown in its copy
   function project(o) {
     const cases = ["bull", "base", "bear"], price = o.price, months = o.months ?? 12, vol = (o.vol ?? 35) / 100;
     if (!(isFinite(price) && price > 0)) throw new Error("price must be above 0");
@@ -314,12 +315,12 @@
     if (!(Number.isInteger(months) && months >= 1 && months <= 36)) throw new Error("horizon must be 1 to 36 months");
     if (!(vol >= 0 && vol <= 2)) throw new Error("volatility must be 0% to 200%");
     const stop = isFinite(o.stop) && o.stop > 0 ? o.stop : null;
-    const nPaths = o.paths ?? 2000, steps = o.steps ?? months * 4, h = months / 12, dt = h / steps, sw = vol / 2;
+    const nPaths = o.paths ?? PROJECTION.paths, steps = o.steps ?? months * 4, h = months / 12, dt = h / steps, sw = vol / 2;
     const t = Array.from({ length: steps + 1 }, (_, i) => i * months / steps);
     const pwv = cases.reduce((a, c) => a + o[c].value * o[c].prob / 100, 0), er = 100 * (pwv / price - 1);
     const scenario = Object.fromEntries(cases.map((c) => [c, t.map((m) => price * Math.pow(o[c].value / price, m / months))]));
     const weighted = t.map((_, i) => cases.reduce((a, c) => a + scenario[c][i] * o[c].prob / 100, 0));
-    const r = rng(o.seed ?? 1), normal = () => Math.sqrt(-2 * Math.log(1 - r())) * Math.cos(2 * Math.PI * r());
+    const seed = o.seed ?? PROJECTION.seed, r = rng(seed), normal = () => Math.sqrt(-2 * Math.log(1 - r())) * Math.cos(2 * Math.PI * r());
     const cols = t.map(() => new Float64Array(nPaths)), ends = new Float64Array(nPaths), picks = { bull: 0, base: 0, bear: 0 };
     let touched = 0;
     const l0 = Math.log(price), w = new Float64Array(steps + 1);
@@ -343,7 +344,7 @@
     for (const x of sorted) if (x >= lo && x <= hi) counts[Math.min(nb - 1, Math.floor((x - lo) / width))]++;
     const share = (f) => { let k = 0; for (const x of ends) if (f(x)) k++; return k / nPaths; };
     return {
-      price, months, vol: vol * 100, stop, t, pwv, expected_return_pct: er, rating: expectedRating(er, o.conviction ?? "Medium"),
+      price, months, vol: vol * 100, stop, t, paths: nPaths, seed, pwv, expected_return_pct: er, rating: expectedRating(er, o.conviction ?? "Medium"),
       scenario, weighted, bands, picks,
       histogram: { lo, width, counts, edges: counts.map((_, i) => lo + i * width) },
       mean_end: ends.reduce((a, b) => a + b, 0) / nPaths,
@@ -395,6 +396,6 @@
   // The rating rule's numbers, for the page's gauge and notes: one source, the same as verify.py.
   const THRESHOLDS = Object.freeze({ overweight: OVERWEIGHT, underweight: UNDERWEIGHT, conviction_ok: Object.freeze([...CONVICTION_OK]) });
 
-  const api = { PortfolioError, validate, valued, sizePosition, extract, check, checkMemo, expectedRating, project, tradeMetrics, sortTrades, TRADE_SORTS, THRESHOLDS, round2 };
+  const api = { PortfolioError, validate, valued, sizePosition, extract, check, checkMemo, expectedRating, project, tradeMetrics, sortTrades, TRADE_SORTS, THRESHOLDS, PROJECTION, round2 };
   if (typeof module === "object" && module.exports) module.exports = api; else root.IpoCore = api;
 })(typeof self !== "undefined" ? self : this);

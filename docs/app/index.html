@@ -242,7 +242,7 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
         <button class="btn" data-preset="def">Defensive</button>
       </div>
       <div class="row"><button class="btn go" id="to-size">▸ Size this trade</button></div>
-      <p class="note">Each of 2,000 simulated paths picks bull, base or bear by its probability, ends near that value and gets there
+      <p class="note">Each of <span data-paths>2,000</span> simulated paths picks bull, base or bear by its probability, ends near that value and gets there
         with the volatility above. The paths average out at the probability-weighted value; the seed is fixed, so the same inputs draw the same chart.</p>
     </div>
     </div>
@@ -256,7 +256,7 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
       </div>
       <div class="panel two" style="gap:14px">
         <div class="card">
-          <div class="ph"><h2><i>01.3</i>Where it ends</h2><small>2,000 paths</small></div>
+          <div class="ph"><h2><i>01.3</i>Where it ends</h2><small><span data-paths>2,000</span> paths</small></div>
           <div class="chart" id="hist"></div>
         </div>
         <div class="card">
@@ -404,6 +404,8 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
   const line = (xs, ys, stroke, width, extra = "") => '<path d="' + xs.map((x, i) => (i ? "L" : "M") + x.toFixed(1) + "," + ys[i].toFixed(1)).join("") + '" fill="none" stroke="' + stroke + '" stroke-width="' + width + '" stroke-linejoin="round" ' + extra + "/>";
   const area = (xs, top, bot, fill) => '<path d="' + xs.map((x, i) => (i ? "L" : "M") + x.toFixed(1) + "," + top[i].toFixed(1)).join("") + xs.slice().reverse().map((x, i) => "L" + x.toFixed(1) + "," + bot[bot.length - 1 - i].toFixed(1)).join("") + 'Z" fill="' + fill + '" stroke="none"/>';
 
+  // the copy names the path count from the code, so changing the default cannot leave the text behind
+  document.querySelectorAll("[data-paths]").forEach((el) => { el.textContent = IpoCore.PROJECTION.paths.toLocaleString("en-US"); });
   let run = null, hover = null;
   function fan() {
     const el = $("fan"), W = Math.max(300, el.clientWidth), narrow = W < 600, H = Math.round(narrow ? Math.max(240, W * 0.78) : Math.min(420, Math.max(260, W * 0.46)));
@@ -495,12 +497,12 @@ td input { width: 100%; min-width: 60px; padding: 4px 6px; }
       ["P(touch stop)", run.stop ? Math.round(100 * run.p_touch_stop) + "%" : "—", run.p_touch_stop > 0.3 ? "dn" : ""],
       ["P(end > now)", Math.round(100 * run.p_end_above_price) + "%", run.p_end_above_price > 0.5 ? "up" : "dn"]];
     $("pj-tiles").innerHTML = T.map(([k, v, c]) => '<div class="tile"><span class="k">' + k + '</span><span class="v ' + c + '">' + v + "</span></div>").join("");
-    $("pj-sub").textContent = run.months + "M · VOL " + run.vol + "% · SEED 1";
+    $("pj-sub").textContent = run.months + "M · VOL " + run.vol + "% · SEED " + run.seed;
     const t = $("tick").textContent, items = [
       [esc(t) + " LAST", "$" + fmt(run.price), ""], ["PWV", "$" + fmt(run.pwv), ""], ["E[R]", pct(er), er >= 0 ? "up" : "dn"], ["RATING", run.rating.toUpperCase(), cls],
       ["BULL", "$" + fmt(run.scenario.bull.at(-1)), "up"], ["BASE", "$" + fmt(run.scenario.base.at(-1)), ""], ["BEAR", "$" + fmt(run.scenario.bear.at(-1)), "dn"],
       ["P10–P90", "$" + fmt(run.range80[0]) + "–" + fmt(run.range80[1]), ""], ["STOP", run.stop ? "$" + fmt(run.stop) : "—", "dn"],
-      ["P(TOUCH STOP)", run.stop ? Math.round(100 * run.p_touch_stop) + "%" : "—", ""], ["PATHS", "2,000", ""], ["API", "OFF", ""], ["CHECKS", "11 RULES", ""]];
+      ["P(TOUCH STOP)", run.stop ? Math.round(100 * run.p_touch_stop) + "%" : "—", ""], ["PATHS", run.paths.toLocaleString("en-US"), ""], ["API", "OFF", ""], ["CHECKS", "11 RULES", ""]];
     const one = items.map(([k, v, c]) => "<span>" + k + ' <b class="' + c + '">' + v + "</b></span>").join("");
     $("tape").innerHTML = one + one;
   }
