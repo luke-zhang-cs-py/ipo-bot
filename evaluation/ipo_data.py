@@ -20,7 +20,6 @@ evaluation counts those per year, because leaving them out flatters every later 
 """
 import concurrent.futures
 import datetime as dt
-import html
 import json
 import pathlib
 import re
@@ -32,6 +31,7 @@ import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))
 try:                                   # the OS certificate store, as the bot uses (needed behind inspecting proxies)
     import truststore
     truststore.inject_into_ssl()
@@ -44,88 +44,8 @@ HEAD_BYTES = 300_000          # a prospectus's cover page and summary sit in its
 FIRST_YEAR = 2015
 WORKERS = 6                   # filings read at once
 
-# Bookrunners, most-named first; the first one found on the cover is taken as the lead.
-BANKS = [
-    "Goldman Sachs", "Morgan Stanley", "J.P. Morgan", "BofA Securities", "Merrill Lynch", "Citigroup", "Credit Suisse",
-    "Barclays", "Deutsche Bank", "UBS", "Jefferies", "Wells Fargo", "RBC Capital", "Evercore", "Cowen", "TD Cowen",
-    "Piper Sandler", "Piper Jaffray", "Stifel", "Raymond James", "William Blair", "Leerink", "SVB Leerink", "Needham",
-    "Oppenheimer", "BMO Capital", "KeyBanc", "Baird", "Cantor", "Guggenheim", "Mizuho", "Nomura", "HSBC", "Truist",
-    "SunTrust", "Canaccord", "Roth Capital", "Lake Street", "Craig-Hallum", "B. Riley", "Ladenburg", "Maxim Group",
-    "Aegis Capital", "EF Hutton", "Boustead", "ThinkEquity", "Univest", "Network 1", "Benchmark", "Kingswood",
-    "Joseph Gunnar", "Spartan Capital", "Dawson James", "Prime Number", "US Tiger", "Tiger Brokers", "AMTD",
-    "Alexander Capital", "WestPark", "Network 1 Financial", "D. Boral", "Revere Securities", "R.F. Lafferty",
-]
-
-
-# ----------------------------------------------------------------------------- parsing (pure, tested)
-
-def text_of(html_bytes):
-    """Plain text from a filing's HTML: tags dropped, entities for spaces and dollars read, whitespace collapsed."""
-    t = html_bytes.decode("latin-1") if isinstance(html_bytes, bytes) else html_bytes
-    t = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", t)
-    t = html.unescape(re.sub(r"<[^>]+>", " ", t)).replace("\xa0", " ")
-    return re.sub(r"\s+", " ", t)
-
-
-def _num(s):
-    return float(s.replace(",", ""))
-
-
-def offer_price(text, rng=None):
-    """The final offer price per share or ADS, or None. Candidates come strongest pattern first; with the
-    marketed range known, the first within half its low to twice its high wins, so a per-share fee or
-    discount on the cover ("$1.50 per share") is not taken for the price."""
-    candidates = []
-    for pat in (r"initial public offering price (?:is|of|per (?:share|ADS)[^$]{0,40}?)\s*\$\s?([\d,]+(?:\.\d+)?)",
-                r"public offering price[^$]{0,60}\$\s?([\d,]+\.\d\d) per (?:share|ADS|American)",
-                r"\$\s?([\d,]+\.\d\d) per (?:share|ADS)"):
-        candidates += [_num(m.group(1)) for m in re.finditer(pat, text[:120000], re.I)]
-    candidates = [c for c in candidates if 0.5 <= c <= 500]
-    if rng:
-        fits = [c for c in candidates if rng[0] * 0.5 <= c <= rng[1] * 2]
-        return fits[0] if fits else None
-    return candidates[0] if candidates else None
-
-
-def price_range(text):
-    """The marketed price range (low, high) from a preliminary prospectus, or None. A single assumed price
-    (common for small fixed-price deals) is returned as (p, p)."""
-    m = (re.search(r"between \$\s?([\d,]+(?:\.\d+)?) and \$\s?([\d,]+(?:\.\d+)?) per (?:share|ADS|American)", text, re.I)
-         or re.search(r"offering price[^.$]{0,80}between \$\s?([\d,]+(?:\.\d+)?) and \$\s?([\d,]+(?:\.\d+)?)", text, re.I))
-    if m and 0.5 <= _num(m.group(1)) <= _num(m.group(2)) <= 500:
-        return _num(m.group(1)), _num(m.group(2))
-    m = re.search(r"assumed (?:initial public )?offering price of \$\s?([\d,]+(?:\.\d+)?)", text, re.I)
-    if m and 0.5 <= _num(m.group(1)) <= 500:
-        return _num(m.group(1)), _num(m.group(1))
-    return None
-
-
-def shares_offered(text):
-    """The number of shares or ADSs offered on the cover, or None."""
-    m = re.search(r"([\d,]{5,}) (?:Shares|shares of (?:Class [A-Z] )?(?:common|ordinary)|American Depositary Shares|ADSs|Ordinary Shares)",
-                  text[:20000])
-    if m:
-        n = _num(m.group(1))
-        if 50_000 <= n <= 5_000_000_000:
-            return n
-    return None
-
-
-def listing_symbol(text):
-    """The ticker the shares listed under, from the prospectus ("under the symbol “SNAP”"), or None."""
-    m = re.search(r"under the (?:trading )?symbols?\s*[“\"'‘]\s*([A-Z][A-Z0-9.\-]{0,6})\s*[”\"'’]", text[:80000])
-    return m.group(1).rstrip(".-") if m else None             # "SNAP." at a sentence end is SNAP
-
-
-def lead_bank(text):
-    """The first bookrunner named on the cover (the lead, by convention), or None."""
-    head = text[:60000]
-    found = [(head.find(b), b) for b in BANKS if head.find(b) >= 0]
-    if not found:
-        return None
-    name = min(found)[1]
-    return {"Merrill Lynch": "BofA Securities", "Piper Jaffray": "Piper Sandler", "SunTrust": "Truist",
-            "Leerink": "SVB Leerink", "Cowen": "TD Cowen", "Network 1 Financial": "Network 1"}.get(name, name)
+# The prospectus parsers live in the bot (one copy, read the same way by both); re-exported for this module's callers.
+from bot.prospectus import lead_bank, listing_symbol, offer_price, price_range, shares_offered, text_of  # noqa: E402,F401
 
 
 def first_days(chart, listing_hint, offer):
