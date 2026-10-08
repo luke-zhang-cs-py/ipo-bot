@@ -59,6 +59,19 @@ a { color: var(--accent); }
       stale-data test, rule tests, a consistency test, and a backtest that cuts the data tools off at the day before an IPO prices.</li>
   </ul>
 
+  <h2>The keyless bot</h2>
+  <p><code>python -m bot update</code> runs on a fresh clone with no keys. On a GitHub Actions schedule it collects S&amp;P 500
+    prices, Treasury yields, the VIX and the IPO pipeline from public sources, each behind an adapter with a fallback, and predicts
+    whether each stock closes higher the next day and whether an IPO's first close is 20% or more above its offer, before it lists.</p>
+  <ul>
+    <li><b>Point in time:</b> every row in its SQLite store carries the moment it became knowable; first releases are kept, a split's
+      rescaled history is a new version, and triggers refuse any edit of the past.</li>
+    <li><b>Checked data:</b> prices, duplicates, unexplained moves, missing sessions against the NYSE calendar, staleness and missed
+      runs, Yahoo against Cboe within 0.5%, and the IPO checks (offer against range, first trade against the 424B4).</li>
+    <li><b>Honest scoring:</b> a walk-forward backtest against base-rate, random-walk and recent-IPO baselines with Diebold-Mariano
+      and block-bootstrap tests, a scrambled-future leakage test, and live predictions that are never revised.</li>
+  </ul>
+
   <h2>What the evaluation found</h2>
   <p>A model that knows how 2009 to 2026 turned out cannot be backtested fairly, so the bot is scored forward: each rating is logged with
     its price and scenarios. To give it a bar to clear, seven simple prediction algorithms were tested month by month on 30 US large
@@ -68,6 +81,7 @@ a { color: var(--accent); }
     <tr><td>Multiple testing: 36 algorithm, universe and horizon tests, permutation p-values, false-discovery rate 10%</td><td>4 pass a naive 5% bar; <b>0</b> survive the correction</td></tr>
     <tr><td>Holdout: picked on 2009 to 2017, checked from 2018</td><td><b>1</b> of 5 held up</td></tr>
     <tr><td>Calibration of 12-month 80% ranges</td><td>held the outcome only <b>70.0% to 77.4%</b> of the time</td></tr>
+    <tr><td>Keyless bot, next-day direction of S&amp;P 500 members, walk-forward 2017 to 2026 (1,196,771 predictions)</td><td>Brier <b>0.2503</b> against <b>0.2496</b> for each stock's base rate: no edge (DM p = 0.19 after Holm)</td></tr>
     <tr><td>Trading costs, top third rebalanced monthly</td><td>a reversal signal ends up <b>8.4</b> points a year behind simply holding everything, at 50 basis points a trade</td></tr>
   </table></div>
   <p>So simple price signals do not give a 12-month edge that holds up, and ranges drawn from history are too narrow. Both findings
@@ -76,7 +90,8 @@ a { color: var(--accent); }
   <h2>Run it</h2>
 <pre>pip install -r requirements.txt
 python src/ipo_bot.py "Rate the &lt;company&gt; IPO"      # needs ANTHROPIC_API_KEY
-python -m pytest -q tests                            # 174 offline tests, free</pre>
+python -m bot update                                 # the keyless bot: no keys
+python -m pytest -q tests                            # 286 offline tests, free</pre>
 
   <h2>Limits</h2>
   <ul>
