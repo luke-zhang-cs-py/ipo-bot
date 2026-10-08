@@ -21,7 +21,13 @@ jobs:
         with:
           node-version: "24"
       - run: pip install -r requirements.txt
-      - run: python -m pytest -q tests --ignore=tests/bot   # the live tests skip themselves without IPO_BOT_LIVE
+      # the research code (src, evaluation with its harness, testkit): every test offline, and coverage under 100%
+      # line and branch fails the job; the live tests skip themselves without IPO_BOT_LIVE
+      - run: >
+          python -m pytest -q tests evaluation/harness --ignore=tests/bot
+          --cov=src --cov=evaluation --cov=testkit --cov-branch --cov-report=term-missing --cov-fail-under=100
+        env:
+          HARNESS_SETUP: demo
 
   bot:
     # The keyless bot: lint, types, and every test offline with no keys and no network. Coverage under 100%
