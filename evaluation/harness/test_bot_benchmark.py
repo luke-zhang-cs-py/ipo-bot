@@ -9,9 +9,10 @@ Or print a full scoreboard first:
 To test your own bot, edit get_setup() below. Everything else stays the same.
 
 In ipo-bot: HARNESS_SETUP picks the data and bots (see real_setup.py):
-    demo     the synthetic demo below (the default)
-    ipo      the IPO model in evaluation/ipo_eval.py on the real IPO dataset, 2018-2023 (the holdout stays sealed)
-    market   the benchmark's stock algorithms on 30 US large caps, monthly
+    real     ipo-bot's IPO model and stock algorithms on the real data, IPO and stock events together (the default)
+    ipo      the IPO models only, 2015-2023 (the holdout stays sealed)
+    market   the benchmark's stock algorithms only, on 30 US large caps, monthly
+    demo     the synthetic demo below
 """
 import os
 import unittest
@@ -45,10 +46,10 @@ def get_setup():
                point-in-time belong here; compare live-only bots in a forward test instead.
     baselines  {label: factory} for the naive models any real edge must clear.
     """
-    which = os.environ.get("HARNESS_SETUP", "demo")
-    if which in ("ipo", "market"):
+    which = os.environ.get("HARNESS_SETUP", "real")
+    if which in ("real", "ipo", "market"):
         import real_setup
-        return real_setup.ipo_setup() if which == "ipo" else real_setup.market_setup()
+        return {"real": real_setup.real_setup, "ipo": real_setup.ipo_setup, "market": real_setup.market_setup}[which]()
 
     from demo_setup import LearningBot, build_demo
 
@@ -72,11 +73,13 @@ def _fmt(df: pd.DataFrame) -> str:
 class BotBenchmark(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cfg = get_setup()
+        cfg = getattr(cls, "_setup", None) or get_setup()
         cls.cfg = cfg
         cls.store, cls.events = cfg["store"], cfg["events"]
         factories = {"candidate": cfg["candidate"], **cfg["rivals"], **cfg["baselines"]}
-        runs = {label: bb.run_walk_forward(f, cls.store, cls.events) for label, f in factories.items()}
+        # The scoreboard run below (python test_bot_benchmark.py) hands its runs over, so no bot is run twice.
+        runs = cls._precomputed if getattr(cls, "_precomputed", None) else {
+            label: bb.run_walk_forward(f, cls.store, cls.events) for label, f in factories.items()}
         cls.names = {label: r["bot"].iloc[0] for label, r in runs.items()}
         cls.candidate = cls.names["candidate"]
         cls.rivals = [cls.names[k] for k in cfg["rivals"]]
@@ -209,8 +212,10 @@ class BotBenchmark(unittest.TestCase):
 
 if __name__ == "__main__":
     cfg = get_setup()
-    factories = [cfg["candidate"], *cfg["rivals"].values(), *cfg["baselines"].values()]
-    preds = pd.concat([bb.run_walk_forward(f, cfg["store"], cfg["events"]) for f in factories], ignore_index=True)
+    factories = {"candidate": cfg["candidate"], **cfg["rivals"], **cfg["baselines"]}
+    runs = {label: bb.run_walk_forward(f, cfg["store"], cfg["events"]) for label, f in factories.items()}
+    BotBenchmark._precomputed, BotBenchmark._setup = runs, cfg
+    preds = pd.concat(runs.values(), ignore_index=True)
     joined = bb.attach_outcomes(preds, cfg["store"], cfg["events"])
     names = list(dict.fromkeys(preds["bot"]))
     print(bb.format_report(joined, names[0], names[1:]))

@@ -6,16 +6,18 @@ bot predicts the same events, and the tests check fairness, leaks (a scrambled-f
 planted cheats), identity masking, calibration, paired significance (Diebold-Mariano with a block bootstrap and
 Holm's correction), stability by year, ranking skill and edge after costs.
 
-`real_setup.py` plugs ipo-bot into it: `ipo` runs the pre-listing IPO model from `evaluation/ipo_eval.py` on the
-real IPO dataset (2015-2023; the 2024-on holdout stays sealed), and `market` runs the benchmark's stock
-algorithms on its 30 US large caps, monthly.
+`real_setup.py` plugs ipo-bot into it. The default, `real`, puts IPO and stock events in one store so every test
+applies: the candidate is the revision-only IPO model (the better of ipo-bot's two on 2015-2023) with the
+benchmark's blend for stocks; the rivals pair the 14-feature IPO model with each single stock algorithm. `ipo` and
+`market` run each half alone. The 2024-on IPO holdout stays sealed throughout.
 
 ```bash
 pip install -r evaluation/harness/requirements.txt
 cd evaluation/harness
-python -m pytest -q test_bot_benchmark.py                          # the synthetic demo
-HARNESS_SETUP=ipo python test_bot_benchmark.py                     # scoreboard, then every test
-HARNESS_SETUP=market python test_bot_benchmark.py
+python test_bot_benchmark.py                                       # the default: real data, IPO and stock events
+HARNESS_SETUP=ipo python test_bot_benchmark.py                     # IPO models only
+HARNESS_SETUP=market python test_bot_benchmark.py                  # stock algorithms only
+HARNESS_SETUP=demo python -m pytest -q test_bot_benchmark.py       # the synthetic demo
 ```
 
 The IPO setup needs the dataset first (`python evaluation/ipo_data.py`); the market setup uses the benchmark's
@@ -25,18 +27,31 @@ price cache, fetched on first use.
 
 | Setup | Passed | Failed | Skipped |
 |---|---|---|---|
-| demo (synthetic) | 14 | 0 | 1 (no knowledge cutoff to check) |
-| ipo: ipo_eval's model, 868 IPOs 2015-2023 | 8 | 4 | 3 (knowledge cutoff; ranking and long-short need stock events) |
-| market: the benchmark blend, 6,150 stock-months 2009-2026 | 8 | 5 | 2 (knowledge cutoff; IPO-only claims need IPO events) |
+| **real (the default)**: revision-only IPO model + blend, 868 IPOs and 6,150 stock-months | **10** | **5** | **0** |
+| ipo: the 14-feature model alone | 8 | 4 | 3 |
+| market: the blend alone | 8 | 5 | 2 |
+| demo (synthetic) | 14 | 0 | 1 |
 
-Every fairness and leak test passes in both real setups: reproducible, no change when the future is scrambled,
-both planted cheats caught, identical predictions with names masked.
+What changed the real setup's markers: the IPO candidate is now the revision-only model (Brier 0.1977 against the
+14-feature model's 0.2017 on 2015-2023, and calibrated: error 1.1% overall against the 5% limit); IPO and stock
+events share one store, so the IPO-only, ranking and cost tests all run; and the candidate declares its true
+knowledge cutoff (it is fitted from nothing inside the walk-forward).
 
-IPO: the model beats the base rate (Brier -0.0309, 95% CI -0.0479 to -0.0127, Holm p = 0.0001) and a coin flip
-(-0.0476), but not its own revision-only version, which scores better (Brier 0.1977 against 0.2017; the model
-wins 2 of 9 years against it). Calibration error 5.4%, against a 5.0% limit. The extra features add nothing
-the price revision doesn't already carry.
+Passing: every fairness and leak test, the knowledge cutoff, beating both baselines, calibration.
 
-Market: no edge. The blend doesn't beat the base rate (p = 0.20) or a coin flip (Holm p = 0.18); its mean
-information coefficient is -0.031 (t = -1.46), and a long-short of its top and bottom fifths loses 0.89% a month
-after costs. The same answer as the benchmark's 0 of 36.
+Failing, and why these are findings rather than bugs:
+- Beats every rival / on IPOs alone: the revision model is better than the 14-feature model (Brier -0.0062 on IPO
+  days) but not significantly (one-sided p = 0.074, Holm 0.37; 95% CI -0.0153 to +0.0026). Six variants (sparser,
+  more regularised, nonlinear, initial-range revision, recalibrated) were tried on 2015-2023; none beat the
+  revision model significantly, so no further change was made.
+- Years and kinds: on stock-months the blend ties every single algorithm year by year (differences within
+  +/-0.0007 Brier), so it can't win 75% of years.
+- Ranking and costs: the stock blend has no edge (IC -0.031; long-short -0.89% a month after costs), as the
+  benchmark found (0 of 36).
+
+These five can't be made to pass by tuning on the same years without the test no longer meaning anything. What
+could genuinely move them: the sealed 2024-2026 IPOs (about 330 more, scored once), or new information for
+stocks (fundamentals), not more settings.
+
+Speed: runs that took 57 s per IPO walk-forward take 15.5 s (one pass over each view, numpy fits, plain-string
+columns in the store); the scoreboard and the tests share their runs; the full default run takes about 8 minutes.

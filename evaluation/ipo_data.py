@@ -4,6 +4,7 @@ it listed, and how it traded after.
     python evaluation/ipo_data.py                 build or extend bench_data/ipo/ipos.jsonl (resumes; about an hour)
     python evaluation/ipo_data.py --summary       counts by year, and how many have prices
     python evaluation/ipo_data.py --refresh       re-read every IPO's cover and prices (after a parser fix)
+    python evaluation/ipo_data.py --initial-ranges   add each IPO's first filed price range
 
 Before the listing (features): the offer price, shares and lead bookrunner from the final prospectus (424B4),
 the price range from the last amended registration (S-1/A or F-1/A) filed before it, the SIC code, and
@@ -372,6 +373,39 @@ def refresh():
                 print(f"  {n}/{len(rows)}", flush=True)
 
 
+INITIAL = ROOT / "bench_data" / "ipo" / "initial_ranges.json"
+
+
+def add_initial_ranges():
+    """For every IPO, the first price range it filed (the earliest S-1/F-1 or amendment that states one), dated:
+    the price range at the start of marketing, against which the final offer's revision is usually measured.
+    Cached in bench_data/ipo/initial_ranges.json; load() merges it in."""
+    sec = Sec()
+    done = json.loads(INITIAL.read_text(encoding="utf-8")) if INITIAL.exists() else {}
+    todo = [r for r in load() if r["adsh"] not in done and r.get("range")]
+    print(f"{len(todo)} IPOs to look up", flush=True)
+
+    def one(r):
+        try:
+            filings, _ = filings_of(sec, r["cik"], before=r["prospectus_date"])
+            regs = [f for f in filings if f[0] in ("S-1", "S-1/A", "F-1", "F-1/A") and f[1] <= r["prospectus_date"]]
+            base = f"https://www.sec.gov/Archives/edgar/data/{int(r['cik'])}"
+            for form, date, acc, doc in regs[:6]:               # the earliest filings, oldest first
+                rng = price_range(text_of(sec.head(f"{base}/{acc.replace('-', '')}/{doc}")))
+                if rng:
+                    return r["adsh"], {"range": list(rng), "date": date}
+            return r["adsh"], {"range": None, "date": None}
+        except Exception as e:
+            return r["adsh"], {"error": str(e)}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        for n, (adsh, v) in enumerate(pool.map(one, todo), 1):
+            if "error" not in v:
+                done[adsh] = v
+            if n % 100 == 0 or n == len(todo):
+                INITIAL.write_text(json.dumps(done), encoding="utf-8")
+                print(f"  {n}/{len(todo)}", flush=True)
+
+
 def load(path=OUT, dedupe=True):
     """The IPO rows (skipped filings left out), oldest prospectus first."""
     latest = {}
@@ -380,6 +414,10 @@ def load(path=OUT, dedupe=True):
             r = json.loads(line)
             latest[r["adsh"]] = r              # a filing redone later replaces its earlier row
     rows = sorted([r for r in latest.values() if "skip" not in r], key=lambda r: r["prospectus_date"])
+    initial = json.loads(INITIAL.read_text(encoding="utf-8")) if INITIAL.exists() else {}
+    for r in rows:
+        if r["adsh"] in initial:
+            r["initial_range"], r["initial_range_date"] = initial[r["adsh"]]["range"], initial[r["adsh"]]["date"]
     if not dedupe:
         return rows
     first = {}                                 # a company's IPO is its first final prospectus; a second one the same
@@ -403,4 +441,5 @@ def summary():
 
 
 if __name__ == "__main__":
-    summary() if "--summary" in sys.argv else refresh() if "--refresh" in sys.argv else build()
+    (summary() if "--summary" in sys.argv else refresh() if "--refresh" in sys.argv
+     else add_initial_ranges() if "--initial-ranges" in sys.argv else build())

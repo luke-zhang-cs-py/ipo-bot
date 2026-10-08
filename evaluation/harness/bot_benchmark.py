@@ -110,7 +110,11 @@ class PointInTimeData:
         f = frame[STORE_COLUMNS].copy()
         f["available_at"] = pd.to_datetime(f["available_at"])
         f["value"] = f["value"].astype(float)
-        f["entity"] = f["entity"].astype(str)
+        # Plain Python strings, not pandas' default Arrow strings: identical values, and filtering and iterating them
+        # in every view is several times faster (pandas 3 made Arrow strings the default).
+        f["entity"] = f["entity"].astype(str).astype(object)
+        f["field"] = f["field"].astype(str).astype(object)
+        f["kind"] = f["kind"].astype(str).astype(object)
         self._frame = f.sort_values("available_at", kind="mergesort").reset_index(drop=True)
         self._times = self._frame["available_at"].astype("datetime64[ns]").to_numpy().view("i8")
 

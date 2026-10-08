@@ -36,6 +36,24 @@ MIN_MARKET_HISTORY = 300
 FACTS = ("offer", "range_lo", "range_hi", "shares", "sic", "foreign", "bank", "spy_20d")        # stock-months with known outcomes before an algorithm's map from score is fitted
 
 
+def fit_logit(X, y, l2=1.0, iters=25):
+    """ipo_eval.Logit's fit in numpy: standardised inputs, an unpenalised intercept, L2 on the rest, Newton steps.
+    Same solution to rounding error (checked in the harness README), a hundred times faster. Returns prob(X)."""
+    mu, sd = X.mean(0), X.std(0)
+    sd[sd == 0] = 1.0
+    Z = np.hstack([np.ones((len(X), 1)), (X - mu) / sd])
+    w = np.zeros(Z.shape[1])
+    pen = np.full(Z.shape[1], float(l2))
+    pen[0] = 0.0
+    for _ in range(iters):
+        p = 1 / (1 + np.exp(-np.clip(Z @ w, -35, 35)))
+        step = np.linalg.solve((Z * (p * (1 - p))[:, None]).T @ Z + np.diag(pen), Z.T @ (p - y) + pen * w)
+        w -= step
+        if np.abs(step).max() < 1e-8:
+            break
+    return lambda Xn: 1 / (1 + np.exp(-np.clip(np.hstack([np.ones((len(Xn), 1)), (Xn - mu) / sd]) @ w, -35, 35)))
+
+
 def _phi(x):
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
@@ -93,6 +111,13 @@ class IPOModelBot:
                 "lead_bank": self.banks[int(f["bank"])] if f["bank"] >= 0 else None,
                 "prices": {"listing_date": day}}
 
+    def _matrix(self, logged, banks):
+        """The logged feature vectors, with bank_share from this refit's league table."""
+        X = np.array([v for _, v in logged], float)
+        if "bank_share" in self.features:
+            X[:, self.features.index("bank_share")] = [banks.get(r.get("lead_bank"), 0.0) for r, _ in logged]
+        return X
+
     def predict(self, view, events):
         # One pass over the view for just the IPOs asked about (training rows come from the bot's own log), instead
         # of a full-table filter per fact: same values as view.latest_many, about three times faster.
@@ -111,7 +136,9 @@ class IPOModelBot:
             prior = [y for d, y in published if start <= d < day]
             mk = {"spy_20d": facts["spy_20d"].get(e.entity, 0.0), "heat_30d": statistics.fmean(prior) if prior else 0.0,
                   "deals_30d": math.log1p(len(prior))}
-            self._log[e.event_id] = (self._row(facts, e.entity, day), mk)
+            row = self._row(facts, e.entity, day)
+            base = self.E.features(row, {row["adsh"]: mk}, {})            # bank_share is set at each refit
+            self._log[e.event_id] = (row, np.array([base[k] for k in self.features], float))
         month = view.as_of.strftime("%Y-%m")
         if month != self.fitted_month:
             train = [self._log[e] for e in known]
@@ -119,8 +146,7 @@ class IPOModelBot:
             self.base = (sum(ys) / len(ys)) if ys else 0.5
             if len(train) >= MIN_IPO_HISTORY and 0 < sum(ys) < len(ys):
                 banks = self.E.bank_shares([r for r, _ in train])
-                feats = [self.E.features(r, {r["adsh"]: mk}, banks) for r, mk in train]
-                self.model = (self.E.Logit(self.features).fit(feats, ys), banks)
+                self.model = (fit_logit(self._matrix(train, banks), np.array(ys, float)), banks)
             else:
                 self.model = None
             self.fitted_month = month
@@ -130,8 +156,7 @@ class IPOModelBot:
                 p = self.base if self.base is not None else 0.5
             else:
                 model, banks = self.model
-                r, mk = self._log[e.event_id]
-                p = model.prob(self.E.features(r, {r["adsh"]: mk}, banks))
+                p = float(model(self._matrix([self._log[e.event_id]], banks))[0])
             out.append((e.event_id, min(max(p, 0.01), 0.99)))
         return pd.DataFrame(out, columns=["event_id", "prob_up"])
 
@@ -227,4 +252,47 @@ def market_setup():
     return {"store": store, "events": events,
             "candidate": lambda s: AlgoBot("blend", "blend_mom_trend_lowvol"),
             "rivals": rivals,
+            "baselines": {"base_rate": lambda s: bb.BaseRateBot(), "coin_flip": lambda s: bb.CoinFlipBot()}}
+
+
+# ----------------------------------------------------------------------------- both together (the default)
+
+REVISION = ["revision", "above_range", "below_range", "no_range"]
+
+
+class CombinedBot:
+    """An IPO bot and a stock bot answering as one, each for its own kind of event. knowledge_cutoff is true for
+    these models: they are fitted from nothing inside the walk-forward, so they know no more than the day
+    before the first row of data."""
+
+    def __init__(self, ipo_bot, market_bot, name, cutoff):
+        self.ipo, self.market, self.name, self.knowledge_cutoff = ipo_bot, market_bot, name, cutoff
+
+    def predict(self, view, events):
+        parts = []
+        for kind, bot in (("ipo", self.ipo), ("market", self.market)):
+            evs = [e for e in events if e.kind == kind]
+            if evs:
+                parts.append(bot.predict(view, evs))
+        out = pd.concat(parts, ignore_index=True)
+        if "expected_return" not in out.columns:
+            out["expected_return"] = np.nan
+        return out
+
+
+def real_setup():
+    """IPO and stock events in one store, so every test applies. Candidate: the revision-only IPO model (the
+    better of ipo-bot's two on 2015-2023: lower Brier, calibrated) with the benchmark's blend for stocks.
+    Rivals: the 14-feature IPO model paired with each single stock algorithm."""
+    import benchmark as bm
+    ipo_store_, ipo_events, banks = ipo_store()
+    mkt_store, mkt_events = market_store()
+    store = bb.PointInTimeData(pd.concat([ipo_store_.frame, mkt_store.frame], ignore_index=True))
+    cutoff = store.frame["available_at"].min() - pd.Timedelta(days=1)
+    events = ipo_events + mkt_events
+    candidate = lambda s: CombinedBot(IPOModelBot(banks, name="ipo_revision", features=REVISION),
+                                      AlgoBot("blend", "blend"), "revision_model+blend", cutoff)
+    rivals = {f"full_model+{a}": (lambda s, a=a: CombinedBot(IPOModelBot(banks, name="ipo_full"), AlgoBot(a, a),
+                                                              f"full_model+{a}", cutoff)) for a in bm.ALGORITHMS}
+    return {"store": store, "events": events, "candidate": candidate, "rivals": rivals,
             "baselines": {"base_rate": lambda s: bb.BaseRateBot(), "coin_flip": lambda s: bb.CoinFlipBot()}}
