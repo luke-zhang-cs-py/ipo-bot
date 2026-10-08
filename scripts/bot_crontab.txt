@@ -1,0 +1,10 @@
+# The keyless bot's schedule for cron, the local alternative to .github/workflows/bot.yml.
+# Install with `crontab -e` and paste these lines, with REPO set to your clone. CRON_TZ keeps the slots in UTC
+# (cronie and most Linux crons honour it; on a cron that does not, convert the hours to local time).
+# The bot's own lock stops overlapping runs, and its health report flags a slot that was missed.
+CRON_TZ=UTC
+REPO=/path/to/ipo-bot
+0 22 * * 1-5   cd "$REPO" && python3 -m bot update --job daily   >> data/logs/cron.log 2>&1
+0 */3 * * 1-5  cd "$REPO" && python3 -m bot update --job edgar   >> data/logs/cron.log 2>&1
+0 6 * * 6      cd "$REPO" && python3 -m bot update --job weekly  >> data/logs/cron.log 2>&1
+0 8 1 * *      cd "$REPO" && python3 -m bot update --job monthly >> data/logs/cron.log 2>&1

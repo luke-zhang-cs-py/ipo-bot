@@ -1,3 +1,14 @@
 anthropic>=1.0
 truststore>=0.10   # verify HTTPS with the OS certificate store (needed behind traffic-inspecting networks)
-pytest>=8          # offline tests only
+# the keyless bot (bot/)
+numpy>=2.0
+pandas>=2.2
+scipy>=1.11
+# tests and checks only (not needed to run the bot)
+pytest>=8
+pytest-cov>=5
+hypothesis>=6.100  # MPL-2.0: used by the tests only, never shipped with the bot
+ruff>=0.6
+black>=24.8
+mypy>=1.11
+mutmut>=3.2        # Linux CI only (needs fork)

@@ -11,3 +11,7 @@ testkit/runs/
 testkit/history.jsonl
 .coverage
 htmlcov/
+.hypothesis/
+.mutmut-cache
+mutants/
+data/

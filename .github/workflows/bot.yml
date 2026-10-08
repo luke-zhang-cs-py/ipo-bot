@@ -1,0 +1,83 @@
+name: bot
+
+# The keyless bot's schedule (python -m bot). Each slot runs one job; every job holds the bot's lock, records
+# a run row and writes the health report, whose staleness check flags any slot that was missed.
+#
+#   daily    prices, macro, reconciliation, scoring, predictions    22:00 UTC, Monday to Friday
+#   edgar    EDGAR filings and IPO predictions                       every 3 hours, Monday to Friday
+#   weekly   walk-forward backtest and leakage test                  Saturday 06:00 UTC
+#   monthly  retrain, adopted only if it beats the current model     the 1st, 08:00 UTC
+#
+# The SQLite database lives in the Actions cache (restored from the newest copy, saved after every run). The
+# small, permanent record (prediction and outcome ledgers, the health and backtest reports) is committed, so it
+# survives the cache being evicted; the bot then rebuilds the database from its sources.
+on:
+  schedule:
+    - cron: "0 22 * * 1-5"
+    - cron: "0 */3 * * 1-5"
+    - cron: "0 6 * * 6"
+    - cron: "0 8 1 * *"
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "daily, edgar, weekly, monthly or all"
+        default: all
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bot          # one run at a time; a slot that arrives during a run waits for it
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      BOT_DATA_DIR: ${{ github.workspace }}/data
+      # Not a key: EDGAR asks every caller to name itself ("Name email"). Kept as a secret only so the address is
+      # not published. Without it the bot runs and skips EDGAR, with a warning in the health report.
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Pick the job for this slot
+        id: job
+        run: |
+          case "${{ github.event.schedule }}" in
+            "0 22 * * 1-5") job=daily ;;
+            "0 */3 * * 1-5") job=edgar ;;
+            "0 6 * * 6") job=weekly ;;
+            "0 8 1 * *") job=monthly ;;
+            *) job="${{ github.event.inputs.job || 'all' }}" ;;
+          esac
+          echo "job=$job" >> "$GITHUB_OUTPUT"
+      - name: Restore the database
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: bot-data-${{ github.run_id }}
+          restore-keys: bot-data-
+      - run: python -m bot update --job ${{ steps.job.outputs.job }}
+      - name: Save the database
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: bot-data-${{ github.run_id }}
+      - name: Commit the ledgers and reports
+        run: |
+          git config user.name "ipo-bot"
+          git config user.email "ipo-bot@users.noreply.github.com"
+          git add tracking/bot reports
+          git diff --cached --quiet && exit 0
+          git commit -m "bot: ${{ steps.job.outputs.job }} $(date -u +%FT%H:%MZ)"
+          for attempt in 1 2 3; do
+            git pull --rebase origin main && git push && exit 0
+            sleep 10
+          done
+          exit 1
