@@ -316,19 +316,33 @@ def backtest(per, months):
 
 # ----------------------------------------------------------------------------- the bot's own forecasts
 
+def ledger_rows():
+    """Every forecast in the ledger, oldest first."""
+    return [json.loads(l) for l in LEDGER.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+def maturity(r):
+    """A logged forecast's (day made, first day of the month it matures in, the month-end close that scores it)."""
+    made = dt.date.fromisoformat(r["date"])
+    m = made.month + r["horizon_months"]
+    due = dt.date(made.year + (m - 1) // 12, (m - 1) % 12 + 1, 1)
+    return made, due, (due - dt.timedelta(days=1)).strftime("%Y-%m")
+
+
+def is_due(due, today=None):
+    """Matured: its last month-end has closed (this month is never over)."""
+    return due <= (today or dt.date.today()).replace(day=1)
+
 def score_ledger(refresh=False):
     """Matured bot forecasts against the algorithms' calls for the same stock on the same month-end."""
     if not LEDGER.exists():
         return "No bot forecasts logged yet (forecasts/ledger.jsonl). Each rating the bot gives is logged; " \
                "the first ones can be scored 12 months after they are made."
-    rows = [json.loads(l) for l in LEDGER.read_text(encoding="utf-8").splitlines() if l.strip()]
-    today = dt.date.today()
+    rows = ledger_rows()
     matured, pending = [], []
     for r in rows:
-        made = dt.date.fromisoformat(r["date"])
-        due = dt.date(made.year + (made.month + r["horizon_months"] - 1) // 12,
-                      (made.month + r["horizon_months"] - 1) % 12 + 1, 1)
-        (matured if due <= today.replace(day=1) else pending).append((r, made, due))
+        made, due, _ = maturity(r)
+        (matured if is_due(due) else pending).append((r, made, due))
     lines = [f"{len(rows)} bot forecasts logged: {len(matured)} matured, {len(pending)} pending."]
     if pending:
         lines.append("Next to mature: " + ", ".join(f"{r['symbol']} ({due:%b %Y})"
@@ -336,7 +350,7 @@ def score_ledger(refresh=False):
     hits = scored = 0
     for r, made, due in matured:
         months = fetch(r["symbol"], refresh)
-        end = (due - dt.timedelta(days=1)).strftime("%Y-%m")
+        end = maturity(r)[2]
         if end not in months:
             lines.append(f"- {r['symbol']}: no price for {end}")
             continue
@@ -358,8 +372,12 @@ def score_ledger(refresh=False):
 # ----------------------------------------------------------------------------- report
 
 def pct(x, d=1):
+    """A share as a signed percentage, the one formatter for every evaluation report: "n/a" for a missing or
+    non-finite value, and no "-0.0%" from rounding."""
+    if x is None or (isinstance(x, float) and not math.isfinite(x)):
+        return "n/a"
     text = f"{100 * x:+.{d}f}%"
-    return text[1:] if float(text[:-1]) == 0 else text      # no "-0.0%" from rounding
+    return text[1:] if float(text[:-1]) == 0 else text
 
 
 def report(refresh=False, ledger=False):
@@ -423,5 +441,5 @@ def main(argv):
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":   # pragma: no cover  (the real run: Yahoo, and caches in the repo)
     sys.exit(main(sys.argv[1:]))

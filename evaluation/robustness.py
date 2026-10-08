@@ -66,11 +66,11 @@ def top_third_net(keep, algo, months, bps):
         top = set(sorted(range(n), key=lambda k: sc[k])[-third:])
         turn = len(top - held) / third if held else 1.0         # share of the portfolio replaced
         turns.append(turn)
-        cost = 2 * turn * bps / 10_000                          # sell the old, buy the new
+        cost = (2 * turn if held else 1.0) * bps / 10_000      # sell the old, buy the new (the first month only buys)
         growth *= (1 + statistics.fmean(keep[1][i][k] for k in top)) * (1 - cost)
         held = top
     years = len(months) / 12
-    return growth ** (1 / years) - 1, statistics.fmean(turns[1:])
+    return growth ** (1 / years) - 1, statistics.fmean(turns[1:]) if len(turns) > 1 else float("nan")
 
 
 def equal_weight(keep, months):
@@ -80,13 +80,12 @@ def equal_weight(keep, months):
     return growth ** (1 / (len(months) / 12)) - 1
 
 
-def pct(x, d=1):
-    return bm.pct(x, d)
+pct = bm.pct
 
 
 def report():
     out = [f"# Robustness tests, {dt.date.today():%d %b %Y}", ""]
-    algos = [a for a in list(bm.ALGORITHMS) + ["Blend (mom+trend+lowvol)"]]
+    algos = list(bm.ALGORITHMS) + ["Blend (mom+trend+lowvol)"]
     tests, controls, data = [], [], {}
     for uni in bm.UNIVERSES:
         keep = {}

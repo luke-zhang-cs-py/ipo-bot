@@ -16,7 +16,9 @@ slippage (0.10% and 0.05% a side by default); the history is split in two to see
 every bot is re-run at 1.5x and 2x the friction, with fills a day late, and with each parameter nudged
 20% either way. A bot whose result against simply holding SPY changes sign under any of those is fragile.
 """
+import dataclasses
 import datetime as dt
+import functools
 import json
 import math
 import pathlib
@@ -33,6 +35,8 @@ try:                                   # the OS certificate store, as the bot us
     truststore.inject_into_ssl()
 except ImportError:
     pass
+
+import benchmark as bm  # noqa: E402  (the one percentage formatter)
 
 START = "2005-01-01"
 FEE = 0.0010                    # per side
@@ -174,18 +178,29 @@ PRICE_IMPACT = 0.1            # and its impact: price x (1 + 0.1 x (share of vol
 PER_SHARE = (0.005, 1.0)      # a per-share commission and its minimum per order, a common US broker schedule
 
 
-def simulate(bot, dates, bars, cost_x=1.0, delay=0, start_cash=10_000.0, fee=FEE, slippage=SLIPPAGE, extras=None,
-             volume_share=False, per_share=False):
+@dataclasses.dataclass(frozen=True)
+class Costs:
+    """How every fill is charged. fee and slippage a side, times cost_x. volume_share: fills capped at
+    VOLUME_LIMIT of the day's volume with quadratic impact (zipline's VolumeShareSlippage, re-implemented from its
+    documented formula); the rest is lost for that day. per_share: PER_SHARE commission instead of the fee."""
+    cost_x: float = 1.0
+    fee: float = FEE
+    slippage: float = SLIPPAGE
+    volume_share: bool = False
+    per_share: bool = False
+
+
+def simulate(bot, dates, bars, delay=0, start_cash=10_000.0, extras=None, costs=None, **cost_settings):
     """Run a bot: after each close it names target weights; they are traded at the open `1 + delay` days later,
-    paying fee and slippage (times cost_x) on every fill. Returns the equity curve, flows and closed trades.
-    extras: {asset: {"volume": [...], "div": [...]}} from aligned(); a dividend is paid as cash on its day.
-    volume_share: fills capped at VOLUME_LIMIT of the day's volume with quadratic impact (zipline's
-    VolumeShareSlippage, re-implemented from its documented formula); the rest is lost for that day.
-    per_share: PER_SHARE commission instead of the percentage fee."""
+    paying the costs (a Costs, or its fields by name: cost_x=2.0, per_share=True, ...) on every fill. Returns the
+    equity curve, flows and closed trades.
+    extras: {asset: {"volume": [...], "div": [...]}} from aligned(); a dividend is paid as cash on its day."""
+    costs = dataclasses.replace(costs or Costs(), **cost_settings)
+    cost_x, slippage, volume_share, per_share = costs.cost_x, costs.slippage, costs.volume_share, costs.per_share
     assets = bot["assets"]
     closes = {a: [c for _, c in bars[a]] for a in assets}
     opens = {a: [o for o, _ in bars[a]] for a in assets}
-    side = (fee + slippage) * cost_x
+    side = (costs.fee + slippage) * cost_x
     contribution = bot.get("contribution")
     cash = 0.0 if contribution else start_cash
     shares = {a: 0.0 for a in assets}
@@ -210,9 +225,8 @@ def simulate(bot, dates, bars, cost_x=1.0, delay=0, start_cash=10_000.0, fee=FEE
             for a in assets:
                 div = extras[a]["div"][i]
                 if div and shares[a] > 0:
-                    cash += shares[a] * div                  # paid as cash, as in a live account
-                    flow_div = shares[a] * div
-                    dividends_paid.append(flow_div)
+                    dividends_paid.append(shares[a] * div)   # paid as cash, as in a live account
+                    cash += dividends_paid[-1]
         if i in pending:
             target = pending.pop(i)
             equity_open = cash + sum(shares[a] * opens[a][i] for a in assets)
@@ -278,7 +292,7 @@ def simulate(bot, dates, bars, cost_x=1.0, delay=0, start_cash=10_000.0, fee=FEE
             "dividends": sum(dividends_paid), "capped_fills": len(capped_fills), "commissions": sum(commissions)}
 
 
-def metrics(run, dates=None):
+def metrics(run):
     """Net return, CAGR, max drawdown (on a time-weighted index, so contributions don't count as gains), trades,
     win rate, average win and loss, profit factor, expectancy, and the share of days invested."""
     curve, flows = run["curve"], run["flows"]
@@ -306,7 +320,7 @@ def metrics(run, dates=None):
 
 def buy_and_hold(dates, bars, cost_x=1.0):
     bot = {"name": "Buy and hold SPY", "assets": ["SPY"], "decide": lambda i, closes, held: {"SPY": 1.0}}
-    return simulate(bot, dates, bars, cost_x)
+    return simulate(bot, dates, bars, cost_x=cost_x)
 
 
 def window(dates, bars, lo=None, hi=None):
@@ -345,8 +359,7 @@ def flips(base, others):
 
 # ----------------------------------------------------------------------------- the report
 
-def pct(x, d=2):
-    return "n/a" if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))) else f"{100 * x:+.{d}f}%"
+pct = functools.partial(bm.pct, d=2)
 
 
 def trade_cells(m):
@@ -458,6 +471,6 @@ def main():
     print(f"Saved to {path}")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":   # pragma: no cover  (the real run: Yahoo, and caches in the repo)
     sys.path.insert(0, str(HERE))
     main()

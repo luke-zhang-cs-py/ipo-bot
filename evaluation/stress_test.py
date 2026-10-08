@@ -45,21 +45,27 @@ def main(argv):
     if "--yes" not in argv:
         sys.exit("Each case is a full research run that costs API credit. Run with --yes to go ahead.")
     picks = [int(a) for a in argv if a.isdigit()] or list(range(1, len(CASES) + 1))
+    if not all(1 <= n <= len(CASES) for n in picks):        # a 0 would quietly run the last case (CASES[-1])
+        sys.exit(f"Questions are numbered 1 to {len(CASES)}.")
     out = HERE / "stress_runs" / dt.datetime.now(BOSTON).strftime("%Y-%m-%d_%H%M%S")
     out.mkdir(parents=True)
-    tools.LEDGER = out / "ledger.jsonl"      # test forecasts stay out of the real forecast log
-    failed = 0
-    for n in picks:
-        question, expect = CASES[n - 1]
-        print(f"\nQ{n}: {question[:90]}")
-        tools.PORTFOLIO["path"] = str(HERE / "portfolio.example.json") if n in PORTFOLIO_CASES else None
-        memo = Bot(log=lambda s: None).ask(question)       # a fresh conversation per case
-        results = check(memo, expect)
-        bad = [name for name, ok in results if not ok]
-        failed += bool(bad)
-        lines = "\n".join(f"- [{'x' if ok else ' '}] {name}" for name, ok in results)
-        (out / f"q{n}.md").write_text(f"> {question}\n\n{memo}\n\n---\nChecks:\n{lines}\n", encoding="utf-8")
-        print("  " + ("all checks pass" if not bad else "FAILED: " + "; ".join(bad)))
+    saved = tools.LEDGER, tools.PORTFOLIO["path"]
+    try:
+        tools.LEDGER = out / "ledger.jsonl"      # test forecasts stay out of the real forecast log
+        failed = 0
+        for n in picks:
+            question, expect = CASES[n - 1]
+            print(f"\nQ{n}: {question[:90]}")
+            tools.PORTFOLIO["path"] = str(HERE / "portfolio.example.json") if n in PORTFOLIO_CASES else None
+            memo = Bot(log=lambda s: None).ask(question)       # a fresh conversation per case
+            results = check(memo, expect)
+            bad = [name for name, ok in results if not ok]
+            failed += bool(bad)
+            lines = "\n".join(f"- [{'x' if ok else ' '}] {name}" for name, ok in results)
+            (out / f"q{n}.md").write_text(f"> {question}\n\n{memo}\n\n---\nChecks:\n{lines}\n", encoding="utf-8")
+            print("  " + ("all checks pass" if not bad else "FAILED: " + "; ".join(bad)))
+    finally:                                     # leave the real ledger and portfolio as they were
+        tools.LEDGER, tools.PORTFOLIO["path"] = saved
     print(f"\n{len(picks) - failed} of {len(picks)} passed every check. Memos in {out}")
     return 1 if failed else 0
 

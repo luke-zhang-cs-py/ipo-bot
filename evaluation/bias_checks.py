@@ -41,7 +41,7 @@ def lookahead(make, closes, dates, samples=30, seed=5):
     """Days where the decision on the full history differs from the decision on history cut at that day."""
     rng = random.Random(seed)
     n = len(dates)
-    days = sorted(rng.sample(range(250, n - 1), min(samples, n - 251)))
+    days = sorted(rng.sample(range(250, n - 1), max(0, min(samples, n - 251))))     # none on a short history
     bad = []
     for i in days:
         full = _decide(make, closes, i, dates)
@@ -66,7 +66,7 @@ def replay_signal_checks(rows, samples=30, seed=5):
     """The paper-replay breakout signal: look-ahead days and warm-up answers."""
     import paper_replay as R
     rng = random.Random(seed)
-    days = sorted(rng.sample(range(200, len(rows) - 1), min(samples, len(rows) - 201)))
+    days = sorted(rng.sample(range(200, len(rows) - 1), max(0, min(samples, len(rows) - 201))))
     bad = [rows[i][0] for i in days if R.signal_on(rows, i) != R.signal_on(rows[:i + 1], i)]
     n = len(rows)
     warm = {("all" if w is None else w): R.signal_on(rows[(0 if w is None else max(0, n - w)):], (n - 1) - (0 if w is None else max(0, n - w)))
@@ -96,10 +96,14 @@ def report():
     return "\n".join(out)
 
 
-if __name__ == "__main__":
+def main():
     for s in (sys.stdout,):
         try:
             s.reconfigure(encoding="utf-8")
         except (AttributeError, ValueError):
             pass
     print(report())
+
+
+if __name__ == "__main__":
+    main()

@@ -24,7 +24,6 @@ probabilities it gave them.
 """
 import bisect
 import datetime as dt
-import json
 import math
 import random
 import statistics
@@ -176,13 +175,13 @@ NULL_KEYS = ("slope", "r2_os", "bss", "ece")
 
 
 def core_scores(recs):
-    """The scores the permutation test compares: no ranges."""
+    """The scores the permutation test compares (no ranges): slope, out-of-sample R2, Brier and its skill, ECE."""
     _, slope = fit_line([r["fx"] for r in recs], [r["yx"] for r in recs])
     sse = sum((r["y"] - r["f"]) ** 2 for r in recs)
     sse0 = sum((r["y"] - r["naive"]) ** 2 for r in recs)
     brier = statistics.fmean((r["p"] - r["beat"]) ** 2 for r in recs)
     brier0 = statistics.fmean((r["clim"] - r["beat"]) ** 2 for r in recs)
-    return {"slope": slope, "r2_os": 1 - sse / sse0 if sse0 else float("nan"),
+    return {"slope": slope, "r2_os": 1 - sse / sse0 if sse0 else float("nan"), "brier": brier,
             "bss": 1 - brier / brier0 if brier0 else float("nan"),
             "ece": ece([r["p"] for r in recs], [r["beat"] for r in recs])}
 
@@ -226,20 +225,12 @@ def ece(ps, ws, width=0.05):
 
 
 def score(recs):
-    f = [r["f"] for r in recs]
-    y = [r["y"] for r in recs]
-    _, slope = fit_line([r["fx"] for r in recs], [r["yx"] for r in recs])
-    sse = sum((r["y"] - r["f"]) ** 2 for r in recs)
-    sse0 = sum((r["y"] - r["naive"]) ** 2 for r in recs)
-    brier = statistics.fmean((r["p"] - r["beat"]) ** 2 for r in recs)
-    brier0 = statistics.fmean((r["clim"] - r["beat"]) ** 2 for r in recs)
+    """core_scores, plus how often each range held the outcome and the average forecast and outcome."""
     cover = {c: statistics.fmean(lo <= r["y"] <= hi for r in recs for lo, hi in [r["ranges"][c]]) for c in RANGES}
     return {
-        "n": len(recs), "slope": slope, "r2_os": 1 - sse / sse0 if sse0 else float("nan"),
-        "brier": brier, "bss": 1 - brier / brier0 if brier0 else float("nan"),
-        "ece": ece([r["p"] for r in recs], [r["beat"] for r in recs]), "cover": cover,
+        "n": len(recs), **core_scores(recs), "cover": cover,
         "normal80": statistics.fmean(r["normal80"][0] <= r["y"] <= r["normal80"][1] for r in recs),
-        "mean_f": statistics.fmean(f), "mean_y": statistics.fmean(y),
+        "mean_f": statistics.fmean(r["f"] for r in recs), "mean_y": statistics.fmean(r["y"] for r in recs),
     }
 
 
@@ -293,16 +284,12 @@ def ledger_calibration(refresh=False):
         return ("No bot forecasts logged yet. When there are, this section shows the same checks for the bot: "
                 "expected return against what happened, and how often its bull and bear cases came true "
                 "against the probabilities it gave them.")
-    rows = [json.loads(l) for l in bm.LEDGER.read_text(encoding="utf-8").splitlines() if l.strip()]
-    first = dt.date.today().replace(day=1)
+    rows = bm.ledger_rows()
     done = []
     for r in rows:
-        made = dt.date.fromisoformat(r["date"])
-        m = made.month + r["horizon_months"]
-        due = dt.date(made.year + (m - 1) // 12, (m - 1) % 12 + 1, 1)
-        if due > first:
+        _, due, end = bm.maturity(r)
+        if not bm.is_due(due):
             continue
-        end = (due - dt.timedelta(days=1)).strftime("%Y-%m")
         prices = bm.fetch(r["symbol"], refresh)
         if end not in prices:
             continue
@@ -338,9 +325,7 @@ def ledger_calibration(refresh=False):
 
 # ----------------------------------------------------------------------------- report
 
-def pct(x, d=1):
-    text = f"{100 * x:+.{d}f}%"
-    return text[1:] if float(text[:-1]) == 0 else text      # no "-0.0%" from rounding
+pct = bm.pct
 
 
 def report(refresh=False, ledger=False):
@@ -354,6 +339,9 @@ def report(refresh=False, ledger=False):
         for h in HORIZONS:
             prep = prepare(months, px, symbols, h)
             per = {a: walk(prep, a) for a in prep["pos"][prep["idx"][0]]}
+            if not per[RANDOM]:                       # too short a history to fit even the first forecast
+                out += [f"### {h}-month forecasts: too few months ({MIN_TRAIN_DATES} matured month-ends come first)", ""]
+                continue
             scores = {a: score(r) for a, r in per.items()}
             bands = null_bands(prep)
             span = f"{per[RANDOM][0]['month']} to {per[RANDOM][-1]['month']}"
