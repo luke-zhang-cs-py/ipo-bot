@@ -110,6 +110,8 @@ class Http:
                     self.sleep(self.cfg.backoff_s * 2**attempt)
                     continue
                 kind = "blocked" if e.code in (401, 403) else "not_found" if e.code == 404 else "http"
+                if self.cfg.record_dir is not None:  # a refusal is part of what a replay must reproduce
+                    record_failure(self.cfg.record_dir, url, kind, e.code)
                 raise SourceError(kind, f"{e.code} from {host}", e.code) from e
             except (TimeoutError, urllib.error.URLError, ConnectionError, OSError) as e:
                 timed_out = isinstance(e, TimeoutError) or "timed out" in str(e)

@@ -118,3 +118,14 @@ def test_sec_needs_a_named_user_agent(tmp_path) -> None:
     h.get("https://data.sec.gov/x")
     h.get("https://example.test/x")
     assert seen[0] == UA and "ipo-bot" in seen[1]
+
+
+def test_recorded_refusals_replay_as_refusals(tmp_path) -> None:
+    rec = tmp_path / "rec"
+    h, _ = client(tmp_path, {"x.test": err(403)}, record_dir=rec)
+    with pytest.raises(SourceError):
+        h.get("https://x.test/missing")
+    replay, _ = client(tmp_path, {}, replay_dir=rec)
+    with pytest.raises(SourceError) as e:
+        replay.get("https://x.test/missing")
+    assert (e.value.kind, e.value.status) == ("blocked", 403)

@@ -36,6 +36,17 @@ question -> Claude + tools (SEC EDGAR, XBRL, FRED, market data, web, calculator)
   stale quotes, wide spreads or a price that ran, and paper trading with a signal-to-execution report
   ([`docs/BOT_SPEC.md`](docs/BOT_SPEC.md)).
 
+## The keyless bot
+
+`python -m bot update` runs on a fresh clone with no keys. It collects S&P 500 prices, Treasury yields, the
+VIX and the IPO pipeline from keyless sources, each behind an adapter with a fallback. It checks the data,
+predicts next-day direction for every member and first-day pops for IPOs before they list, scores those
+predictions when they resolve, and writes a health report. Storage is SQLite and point-in-time: every row has
+`available_at`, first releases are kept, and history can't be overwritten. The schedule is in GitHub Actions:
+daily after the close, EDGAR every 3 hours, a weekly walk-forward backtest with Diebold-Mariano tests against
+baselines, and a monthly retrain that is adopted only if it does better. The tests run offline at 100% line and
+branch coverage. Details: [`bot/README.md`](bot/README.md); latest reports: [`reports/`](reports/).
+
 ## What the evaluation found
 
 The model knows how past years turned out, so it is scored forward: each rating is logged with its price and
@@ -75,6 +86,7 @@ python evaluation/tracker.py                             # the paper bot against
 ```bash
 python -m pytest -q tests                  # 174 offline tests, free (10 need Node: the browser demo against the Python)
 IPO_BOT_LIVE=1 python -m pytest -q tests/test_live_market.py   # 15 live checks on real SEC filings and prices
+python -m pytest -q tests/bot --cov=bot    # the keyless bot: offline, no keys, 100% line and branch coverage
 python testkit/kit.py regress --yes        # the test kit, live: calculation cases, hallucination traps, a tools-off
                                            # stale-data test, rule tests; costs API credit
 ```
@@ -85,6 +97,8 @@ backtest that cuts the data tools off at the day before pricing.
 ## Layout
 
 ```
+bot/          the keyless prediction bot (python -m bot): adapters, store, checks, models, backtest, tracking
+reports/      its latest health and backtest reports (tracking/bot/ holds its prediction ledgers)
 src/          the bot (ipo_bot.py), data tools, portfolio sizing, checks, verify, audit, ledger, execution, monitor, paper
 prompts/      the system and auditor prompts
 evaluation/   benchmark, calibration, robustness, backtest suite, trading bots, IPO dataset and evaluation, stress test
