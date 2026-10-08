@@ -63,7 +63,9 @@ def stock_walkforward(
     res = pd.concat(out, ignore_index=True)
     # the base rate is computed over the whole panel (so its history starts at the panel's start), then joined
     known = [_next_session(d) if not np.isnan(y) else None for d, y in zip(panel["date"], panel["y"])]
-    panel = panel.assign(p_base=models.base_rate(panel["y"], panel["symbol"], panel["date"], known, prior=0.5))
+    panel = panel.assign(
+        p_base=models.base_rate(panel["y"], panel["symbol"], panel["date"], known, prior=models.PRIOR_UP)
+    )
     res = res.merge(panel[["date", "symbol", "p_base"]], on=["date", "symbol"], how="left")
     res["v_base"] = 0.0
     res["p_rw"], res["v_rw"] = 0.5, 0.0
@@ -77,11 +79,11 @@ def ipo_walkforward(rows: pd.DataFrame, min_train: int = IPO_MIN_TRAIN, l2: floa
             columns=["cik", "moment", "y", "ret", "p_model", "v_model", "p_base", "v_base", "p_recent", "v_recent"]
         )
     rows = rows.sort_values(["moment", "cik"]).reset_index(drop=True)
-    quarters = sorted({f"{m[:4]}-{(int(m[5:7]) - 1) // 3 * 3 + 1:02d}-01" for m in rows["moment"]})
+    quarters = sorted({markets.quarter_start(dt.date.fromisoformat(m)).isoformat() for m in rows["moment"]})
     out = []
     for q in quarters:
         train = rows[rows["trade_date"].notna() & (rows["trade_date"] < q)]
-        nxt = f"{int(q[:4]) + (q[5:7] == '10')}-{(int(q[5:7]) + 2) % 12 + 1:02d}-01"
+        nxt = markets.next_quarter(dt.date.fromisoformat(q)).isoformat()
         test = rows[(rows["moment"] >= q) & (rows["moment"] < nxt)]
         if len(train) < min_train or test.empty:
             continue
@@ -94,10 +96,10 @@ def ipo_walkforward(rows: pd.DataFrame, min_train: int = IPO_MIN_TRAIN, l2: floa
         out.append(t)
     known = rows["trade_date"].tolist()
     base = rows.assign(
-        p_base=models.base_rate(rows["y"], ["all"] * len(rows), rows["moment"], known, prior=0.25),
-        v_base=models.recent_mean(rows["ret"], rows["moment"], known, prior=0.15, window=10_000),
-        p_recent=models.recent_mean(rows["y"], rows["moment"], known, prior=0.25),
-        v_recent=models.recent_mean(rows["ret"], rows["moment"], known, prior=0.15),
+        p_base=models.base_rate(rows["y"], ["all"] * len(rows), rows["moment"], known, prior=models.PRIOR_POP),
+        v_base=models.recent_mean(rows["ret"], rows["moment"], known, prior=models.PRIOR_FIRST_DAY, window=10_000),
+        p_recent=models.recent_mean(rows["y"], rows["moment"], known, prior=models.PRIOR_POP),
+        v_recent=models.recent_mean(rows["ret"], rows["moment"], known, prior=models.PRIOR_FIRST_DAY),
     )
     if not out:
         return pd.DataFrame(

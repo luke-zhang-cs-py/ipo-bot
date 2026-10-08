@@ -485,7 +485,7 @@ def test_watch_warns_after_three_bad_periods_and_on_drift(store: Store) -> None:
         "calibration drift" in w for w in out["warnings"]
     )
     assert tracking.watch(store, "ipo", 3, 0.1) == {"periods": [], "warnings": []}
-    assert tracking.period_of("ipo", pd.Series({"made_at": "2025-05-02T00:00:00Z"})) == "2025-Q2"
+    assert tracking.period_of("ipo", pd.Series({"made_at": "2025-05-02T00:00:00Z"})) == "2025Q2"
 
 
 def test_score_voids_a_target_with_no_close(tmp_path) -> None:
@@ -545,3 +545,14 @@ def test_settings_from_environment_and_env_file(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(config, "ROOT", tmp_path)
     monkeypatch.delenv("SEC_USER_AGENT", raising=False)
     assert config.settings().sec_user_agent == "A B a@b.c"
+
+
+def test_periods_without_a_baseline_do_not_count_as_losses(store: Store) -> None:
+    rows, outs = [], []
+    for w, day in enumerate(("2025-09-02", "2025-09-09", "2025-09-16")):
+        pid = f"m:{w}"
+        rows.append(pred(pid, "stock-x", "S", day, 0.9))  # the model alone: no baseline that period
+        outs.append({"pred_id": pid, "outcome": 0.0, "value": 0.0, "resolved_at": "x", "run_id": "r"})
+    store.record("predictions", rows)
+    store.record("outcomes", outs)
+    assert not any("each of the last" in w for w in tracking.watch(store, "stock", 3, 0.5)["warnings"])

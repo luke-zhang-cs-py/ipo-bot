@@ -45,8 +45,6 @@ class Settings:
     tracking_dir: Optional[pathlib.Path] = None  # committed JSONL ledgers (None: data_dir/tracking)
     reports_dir: Optional[pathlib.Path] = None  # committed health and backtest reports (None: data_dir/reports)
     user_agent: str = "ipo-bot/1.0 (+https://github.com/luke-zhang-cs-py/ipo-bot)"
-    # Nasdaq's site answers only browser-like clients; the request still says which project it is from
-    browser_agent: str = "Mozilla/5.0 (compatible; ipo-bot/1.0; +https://github.com/luke-zhang-cs-py/ipo-bot)"
     # sources: requests a second per host (SEC's published limit is 10; Yahoo and Nasdaq publish none)
     rate_limits: Mapping[str, float] = field(
         default_factory=lambda: {"www.sec.gov": 8.0, "efts.sec.gov": 8.0, "data.sec.gov": 8.0}
@@ -54,6 +52,7 @@ class Settings:
     default_rate: float = 2.0
     timeout_s: float = 30.0
     retries: int = 4
+    max_retry_after_s: float = 60.0  # a server asking to wait longer is treated as down for this run
     backoff_s: float = 1.0  # 1, 2, 4, 8 seconds between tries (or Retry-After when given)
     # checks
     reconcile_tolerance: float = 0.005  # two price sources must agree within 0.5%

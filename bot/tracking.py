@@ -17,7 +17,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import pathlib
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 import numpy as np
 import pandas as pd
@@ -88,7 +88,7 @@ def predict(ctx: Ctx) -> Dict[str, int]:
     return out
 
 
-def _ensure_model(ctx: Ctx, kind: str, df: pd.DataFrame, feats: Any) -> Optional[models.Model]:
+def _ensure_model(ctx: Ctx, kind: str, df: pd.DataFrame, feats: Sequence[str]) -> Optional[models.Model]:
     """The adopted model; on a fresh database, a first one fitted on everything known now."""
     m = current_model(ctx.store, kind)
     if m is not None:
@@ -165,17 +165,17 @@ def predict_ipos(ctx: Ctx) -> int:
     if m is None:
         return 0
     known = trained.sort_values("trade_date")
-    pooled = float(known["y"].mean()) if len(known) else 0.25
+    pooled = float(known["y"].mean()) if len(known) else models.PRIOR_POP
     recent = known.tail(20)
     forecasts = {
         m.model_id: (m.prob(pending), m.value(pending)),
         "base_rate": (
             np.full(len(pending), pooled),
-            np.full(len(pending), float(known["ret"].mean()) if len(known) else 0.15),
+            np.full(len(pending), float(known["ret"].mean()) if len(known) else models.PRIOR_FIRST_DAY),
         ),
         "recent_ipos": (
-            np.full(len(pending), float(recent["y"].mean()) if len(recent) else 0.25),
-            np.full(len(pending), float(recent["ret"].mean()) if len(recent) else 0.15),
+            np.full(len(pending), float(recent["y"].mean()) if len(recent) else models.PRIOR_POP),
+            np.full(len(pending), float(recent["ret"].mean()) if len(recent) else models.PRIOR_FIRST_DAY),
         ),
     }
     rows = []
@@ -206,7 +206,7 @@ class PredictionError(Exception):
     """A forecast that fails the output checks: never recorded."""
 
 
-def _check_outputs(rows: List[Dict[str, Any]], subjects: set, forecasters: int) -> None:
+def _check_outputs(rows: List[Dict[str, Any]], subjects: Set[str], forecasters: int) -> None:
     """Every output finite, every probability in [0, 1], every requested subject answered by every forecaster."""
     for r in rows:
         if not (np.isfinite(r["prob"]) and np.isfinite(r["value"])):
@@ -310,8 +310,7 @@ def period_of(kind: str, row: pd.Series) -> str:
     if kind == "stock":
         y, w, _ = dt.date.fromisoformat(row["target"]).isocalendar()
         return f"{y}-W{w:02d}"
-    d = dt.date.fromisoformat(row["made_at"][:10])
-    return f"{d.year}-Q{(d.month - 1) // 3 + 1}"
+    return markets.quarter_label(dt.date.fromisoformat(row["made_at"][:10]))
 
 
 def watch(store: Store, kind: str, warn_periods: int, drift: float) -> Dict[str, Any]:
@@ -332,22 +331,23 @@ def watch(store: Store, kind: str, warn_periods: int, drift: float) -> Dict[str,
             }
         periods.append(row)
     warnings = []
-    recent = [p for p in periods if "model" in p][-warn_periods:]
+    # only periods where the model and a baseline were both scored count (else "worse in every one" holds of none)
+    scored = [p for p in periods if "model" in p and any(b in p for b in BASELINES[kind])]
+    recent = scored[-warn_periods:]
     if len(recent) == warn_periods and all(
-        p["model"]["brier"] > min(p[b]["brier"] for b in BASELINES[kind] if b in p)
-        for p in recent
-        if any(b in p for b in BASELINES[kind])
+        p["model"]["brier"] > min(p[b]["brier"] for b in BASELINES[kind] if b in p) for p in recent
     ):
         warnings.append(
             f"{kind}: the model's Brier was worse than the best baseline's in each of the last {warn_periods} periods"
         )
-    if recent:
-        model_rows = df[(df["family"] == "model") & df["period"].isin([p["period"] for p in recent])]
+    last = [p for p in periods if "model" in p][-warn_periods:]
+    if last:
+        model_rows = df[(df["family"] == "model") & df["period"].isin([p["period"] for p in last])]
         ece = float(stats.calibration(model_rows["prob"].to_numpy(), model_rows["outcome"].to_numpy())["ece"])
         if len(model_rows) >= 50 and ece > drift:
             warnings.append(
                 f"{kind}: calibration drift: expected calibration error {ece:.3f} over the last "
-                f"{len(recent)} periods (limit {drift:.2f})"
+                f"{len(last)} periods (limit {drift:.2f})"
             )
     return {"periods": periods, "warnings": warnings}
 

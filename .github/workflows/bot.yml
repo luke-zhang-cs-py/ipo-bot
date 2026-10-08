@@ -8,7 +8,8 @@ name: bot
 #   weekly   walk-forward backtest and leakage test                  Saturday 06:00 UTC
 #   monthly  retrain, adopted only if it beats the current model     the 1st, 08:00 UTC
 #
-# The SQLite database lives in the Actions cache (restored from the newest copy, saved after every run). The
+# The SQLite database lives in the Actions cache (restored from the newest copy, saved after every run); each
+# run's raw responses are kept as a 90-day artifact. The
 # small, permanent record (prediction and outcome ledgers, the health and backtest reports) is committed, so it
 # survives the cache being evicted; the bot then rebuilds the database from its sources.
 on:
@@ -35,7 +36,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      BOT_DATA_DIR: ${{ github.workspace }}/data
+      # (BOT_DATA_DIR is left unset on purpose: with it set, the ledgers and reports go under data/ and nothing
+      # would be committed)
       # Not a key: EDGAR asks every caller to name itself ("Name email"). Kept as a secret only so the address is
       # not published. Without it the bot runs and skips EDGAR, with a warning in the health report.
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
@@ -63,8 +65,20 @@ jobs:
           key: bot-data-${{ github.run_id }}
           restore-keys: bot-data-
       - run: python -m bot update --job ${{ steps.job.outputs.job }}
+      - name: Keep this run's raw responses (90 days) and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-${{ github.run_id }}
+          path: |
+            data/raw
+            data/logs
+            data/health
+          if-no-files-found: ignore
       - name: Save the database
         if: always()
+        run: rm -rf data/raw    # kept in the artifact above; the cache holds the database, not every response
+      - if: always()
         uses: actions/cache/save@v4
         with:
           path: data

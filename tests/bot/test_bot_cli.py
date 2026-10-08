@@ -25,8 +25,13 @@ def replay(tmp_path):
 
 
 def env(monkeypatch, tmp_path, rec):
-    for k, v in {"BOT_DATA_DIR": str(tmp_path / "cli"), "BOT_REPLAY": str(rec), "SEC_USER_AGENT": UA,
-                 "BOT_SYMBOLS": "AAA,BBB", "BOT_HISTORY_START": "2025-06-02"}.items():
+    for k, v in {
+        "BOT_DATA_DIR": str(tmp_path / "cli"),
+        "BOT_REPLAY": str(rec),
+        "SEC_USER_AGENT": UA,
+        "BOT_SYMBOLS": "AAA,BBB",
+        "BOT_HISTORY_START": "2025-06-02",
+    }.items():
         monkeypatch.setenv(k, v)
 
 

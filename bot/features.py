@@ -112,7 +112,7 @@ def ipo_rows(deals: Sequence[ipos.Deal], macro_rows: pd.DataFrame, pop: float) -
     if not cands:
         return pd.DataFrame(columns=["cik", "company", "moment", *IPO_FEATURES, "y", "ret", "trade_date"])
     moments = [str(ipo_moment(d)) for d in cands]
-    times = [markets.close_utc(dt.date.fromisoformat(m)) + dt.timedelta(hours=6) for m in moments]
+    times = [markets.close_utc(dt.date.fromisoformat(m)) + markets.FILING_DELAY for m in moments]
     vix = macro_asof(macro_rows, times)
     traded = sorted(
         (

@@ -18,6 +18,10 @@ import numpy as np
 import pandas as pd
 
 CLIP = 5.0
+# What a baseline says before it has outcomes to go on
+PRIOR_UP = 0.5  # a stock closes higher next session
+PRIOR_POP = 0.25  # an IPO's first close is 20% or more above its offer (about the long-run US rate)
+PRIOR_FIRST_DAY = 0.15  # an IPO's first-day return
 
 
 def fit_logit(x: np.ndarray, y: np.ndarray, l2: float = 1.0, iters: int = 50) -> np.ndarray:

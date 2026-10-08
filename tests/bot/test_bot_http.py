@@ -129,3 +129,10 @@ def test_recorded_refusals_replay_as_refusals(tmp_path) -> None:
     with pytest.raises(SourceError) as e:
         replay.get("https://x.test/missing")
     assert (e.value.kind, e.value.status) == ("blocked", 403)
+
+
+def test_retry_after_is_capped_and_the_last_try_does_not_wait(tmp_path) -> None:
+    h, sleeps = client(tmp_path, {"x.test": err(429, "3600")}, retries=2, rate_limits={"x.test": 1e9})
+    with pytest.raises(SourceError):
+        h.get("https://x.test/a")
+    assert [s for s in sleeps if s >= 0.01] == [60.0]  # one wait between two tries, capped at a minute

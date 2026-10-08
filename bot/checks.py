@@ -24,6 +24,8 @@ from bot.config import Settings
 from bot.store import APPEND_ONLY, TABLES, Store, parse_iso
 
 Issue = Dict[str, Any]
+MACRO_SLACK_DAYS = 1  # yields post hours after the close: one more session of slack than prices
+EARLIEST_CLOSE_UTC = "T20:00:00Z"  # 16:00 New York in daylight time: no session closes earlier in UTC
 
 
 def issue(check: str, subject: str, detail: str, severity: str = "error") -> Issue:
@@ -138,7 +140,7 @@ def staleness(
             out.append(issue("staleness", s, f"newest bar {newest[s]}, {n} trading days behind {through}"))
     for series, d in macro_newest.items():
         n = lag(d, through)
-        if n is None or n > cfg.stale_trading_days + 1:  # yields post after the close: one more day of slack
+        if n is None or n > cfg.stale_trading_days + MACRO_SLACK_DAYS:
             out.append(issue("staleness", series, f"newest value {d}, behind {through}"))
     return out
 
@@ -216,7 +218,8 @@ def point_in_time(store: Store) -> List[Issue]:
             if f"{t}_no_{op}" not in names:
                 out.append(issue("point_in_time", t, f"append-only trigger {t}_no_{op} is missing"))
     early = store.query(
-        "SELECT symbol, date, source, available_at FROM prices WHERE available_at < date || 'T20:00:00Z' LIMIT 20"
+        "SELECT symbol, date, source, available_at FROM prices WHERE available_at < date || ? LIMIT 20",
+        (EARLIEST_CLOSE_UTC,),
     )
     out += [
         issue(

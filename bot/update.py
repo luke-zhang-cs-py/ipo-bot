@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import uuid
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Optional
 
 from bot import __version__, checks, collect, data, edgar, evaluate, features, health, markets, tracking
 from bot.config import Settings
@@ -60,7 +61,7 @@ def run(job: str, cfg: Settings, now: Optional[dt.datetime] = None, http: Option
             status = "partial" if ctx.warnings else "ok"
         except Exception as e:
             store.finish_run(run_id, "failed", {"error": f"{type(e).__name__}: {e}", **_jsonable(summary)})
-            event(log, "run_failed", 40, job=job, run_id=run_id, error=str(e))
+            event(log, "run_failed", logging.ERROR, job=job, run_id=run_id, error=str(e))
             store.close()
             raise
         store.finish_run(run_id, status, _jsonable(summary))
@@ -92,7 +93,9 @@ def daily(ctx: Ctx) -> Dict[str, Any]:
     day = markets.last_closed_session(ctx.now)
     bars = data.bars(ctx.store, symbols=symbols)
     recent = bars[bars["date"] >= markets.previous_trading_day(markets.previous_trading_day(day)).isoformat()]
-    flagged = {i["subject"].split()[0] for i in collect_checks(ctx, recent)}
+    # symbols whose newest moves look wrong are reconciled today whatever the rotation says
+    moved = checks.moves(recent, data.splits(ctx.store), data.dividends(ctx.store), ctx.cfg.max_daily_move)
+    flagged = {i["subject"].split()[0] for i in moved}
     reconciled = collect.reconcile(ctx, [*collect.rotation(symbols, day), *sorted(flagged)])
     scored = tracking.score(ctx)
     made = tracking.predict(ctx)
@@ -105,11 +108,6 @@ def daily(ctx: Ctx) -> Dict[str, Any]:
         "scored": scored,
         "predictions": made,
     }
-
-
-def collect_checks(ctx: Ctx, bars: Any) -> List[Dict[str, Any]]:
-    """Symbols whose newest moves look wrong are reconciled today whatever the rotation says."""
-    return checks.moves(bars, data.splits(ctx.store), data.dividends(ctx.store), ctx.cfg.max_daily_move)
 
 
 def _tally(sources: Dict[str, str]) -> Dict[str, int]:

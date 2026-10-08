@@ -52,6 +52,9 @@ def _open(req: urllib.request.Request, timeout: float) -> bytes:  # pragma: no c
         return bytes(r.read())
 
 
+RETRIED = (429, 500, 502, 503, 504)  # busy or briefly broken: worth another try
+
+
 class Http:
     """A polite client. sleep and opener are injectable so tests run instantly and offline."""
 
@@ -94,33 +97,28 @@ class Http:
         for attempt in range(self.cfg.retries):
             self._wait_turn(host)
             self.requests += 1
+            wait: Optional[float] = None  # the server's Retry-After, when it gave one
             try:
                 body = self.opener(urllib.request.Request(url, headers=hdrs), self.cfg.timeout_s)
             except urllib.error.HTTPError as e:
-                if e.code == 429:
-                    last = SourceError("rate_limited", f"429 from {host}")
-                    retry_after = e.headers.get("Retry-After") if e.headers else None
-                    wait = (
-                        float(retry_after) if retry_after and retry_after.isdigit() else self.cfg.backoff_s * 2**attempt
-                    )
-                    self.sleep(wait)
-                    continue
-                if e.code in (500, 502, 503, 504):
-                    last = SourceError("http", f"{e.code} from {host}")
-                    self.sleep(self.cfg.backoff_s * 2**attempt)
-                    continue
-                kind = "blocked" if e.code in (401, 403) else "not_found" if e.code == 404 else "http"
-                if self.cfg.record_dir is not None:  # a refusal is part of what a replay must reproduce
-                    record_failure(self.cfg.record_dir, url, kind, e.code)
-                raise SourceError(kind, f"{e.code} from {host}", e.code) from e
+                if e.code not in RETRIED:
+                    kind = "blocked" if e.code in (401, 403) else "not_found" if e.code == 404 else "http"
+                    if self.cfg.record_dir is not None:  # a refusal is part of what a replay must reproduce
+                        record_failure(self.cfg.record_dir, url, kind, e.code)
+                    raise SourceError(kind, f"{e.code} from {host}", e.code) from e
+                last = SourceError("rate_limited" if e.code == 429 else "http", f"{e.code} from {host}", e.code)
+                header = e.headers.get("Retry-After") if e.headers else None
+                wait = float(header) if header and header.isdigit() else None
             except (TimeoutError, urllib.error.URLError, ConnectionError, OSError) as e:
                 timed_out = isinstance(e, TimeoutError) or "timed out" in str(e)
                 last = SourceError("timeout" if timed_out else "unreachable", f"{host}: {e}")
-                self.sleep(self.cfg.backoff_s * 2**attempt)
-                continue
-            body = body[:limit] if limit else body
-            self._snapshot(url, body)
-            return body
+            else:
+                body = body[:limit] if limit else body
+                self._snapshot(url, body)
+                return body
+            if attempt + 1 < self.cfg.retries:  # no point waiting after the last try
+                backoff = self.cfg.backoff_s * 2**attempt
+                self.sleep(min(wait, self.cfg.max_retry_after_s) if wait is not None else backoff)
         assert last is not None
         raise last
 

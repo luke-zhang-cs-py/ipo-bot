@@ -12,6 +12,7 @@ import gzip
 import re
 from typing import Any, Dict, List, Optional, Sequence
 
+from bot import markets
 from bot.adapters.base import SchemaError, conform
 from bot.adapters.sec_search import FORMS
 
@@ -21,7 +22,7 @@ LINE = re.compile(r"^(\S+(?: \S+)*?)\s{2,}(.+?)\s{2,}(\d+)\s+(\d{4}-?\d\d-?\d\d)
 
 
 def quarter(day: dt.date) -> int:
-    return (day.month - 1) // 3 + 1
+    return int(markets.quarter_label(day)[-1])
 
 
 def url(day: Optional[dt.date] = None, year: Optional[int] = None, qtr: Optional[int] = None, **_: Any) -> str:

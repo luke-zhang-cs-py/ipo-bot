@@ -19,7 +19,8 @@ from bot.context import Ctx
 from bot.store import available
 
 DAILY_LOOKBACK = 10  # days the daily index is read back on a fresh database
-FILING_DELAY = dt.timedelta(hours=6)  # EDGAR disseminates until 22:00 New York: a filing is public by then
+FILING_DELAY = markets.FILING_DELAY
+RECENT_DEAL_DAYS = 30  # a deal younger than this is looked for every run
 RETRY_DAYS = 7  # how often a priced deal with no first trade found is looked for again
 FIRST_TRADE_WINDOW = 10  # trading days after pricing in which the first trade must fall
 DOC_FORMS = (*ipos.REGISTRATIONS, "424B4")
@@ -79,7 +80,7 @@ def daily(ctx: Ctx, budget: Budget) -> List[str]:
     day = dt.date.fromisoformat(cur) + dt.timedelta(days=1) if cur else today - dt.timedelta(days=DAILY_LOOKBACK)
     if not ctx.store.cursor("edgar_backfill"):
         # the backfill starts with the quarter holding the daily window's first day (the overlap is a no-op)
-        nxt = dt.date(day.year + (day.month > 9), (((day.month - 1) // 3 + 1) % 4) * 3 + 1, 1)
+        nxt = markets.next_quarter(day)
         ctx.store.set_cursor("edgar_backfill", nxt.isoformat(), ctx.run_id, ctx.at)
     reads: List[Tuple[dt.date, Optional[Any]]] = []
     while day <= today and budget.left > 0:
@@ -137,17 +138,16 @@ def backfill(ctx: Ctx, budget: Budget, reserve: int = 50) -> List[str]:
         if not cur:
             break
         start = dt.date.fromisoformat(cur)  # the first day of the earliest quarter already covered
-        prev = (start - dt.timedelta(days=1)).replace(day=1)
-        prev = prev.replace(month=((prev.month - 1) // 3) * 3 + 1)
-        if prev < first.replace(day=1, month=((first.month - 1) // 3) * 3 + 1):
+        prev = markets.quarter_start(start - dt.timedelta(days=1))
+        if prev < markets.quarter_start(first):
             break
         res = read(ctx.http, sec_index, year=prev.year, qtr=sec_index.quarter(prev))
         if not res.ok:
-            ctx.warn("backfill_failed", quarter=f"{prev.year}Q{sec_index.quarter(prev)}", error=res.failures[-1][1])
+            ctx.warn("backfill_failed", quarter=markets.quarter_label(prev), error=res.failures[-1][1])
             break
         _put_filings(ctx, [r for r in res.rows if r["filed"] >= ctx.cfg.history_start])
         ctx.store.set_cursor("edgar_backfill", prev.isoformat(), ctx.run_id, ctx.at)
-        done.append(f"{prev.year}Q{sec_index.quarter(prev)}")
+        done.append(markets.quarter_label(prev))
         companies(ctx, budget)
         documents(ctx, budget)
     return done
@@ -205,7 +205,7 @@ def companies(ctx: Ctx, budget: Budget) -> int:
 def documents(ctx: Ctx, budget: Budget) -> int:
     """Read the cover of each IPO registration and final prospectus not read yet: live deals first, then the
     newest historical ones. Follow-ons and SPACs are not read."""
-    deals = {d.cik: d for d in _deals(ctx)}
+    deals = {d.cik: d for d in deals_asof(ctx.store)}
     have = {r["accession"] for r in ctx.store.asof("documents")}
     todo = ctx.store.query(
         f"SELECT accession, cik, form, filed, file FROM filings WHERE form IN ({', '.join('?' * len(DOC_FORMS))}) "
@@ -248,10 +248,6 @@ def documents(ctx: Ctx, budget: Budget) -> int:
     return n
 
 
-def _deals(ctx: Ctx, at: Optional[str] = None) -> List[ipos.Deal]:
-    return deals_asof(ctx.store, at)
-
-
 def deals_asof(store: Any, at: Optional[str] = None) -> List[ipos.Deal]:
     """Every deal as it was knowable at `at` (None: everything stored)."""
     docs = {r["accession"]: r["data"] for r in store.asof("documents", at)}
@@ -264,13 +260,17 @@ def first_trades(ctx: Ctx) -> int:
     """Find the first trading day of each priced or effective IPO that has a symbol and no first trade yet."""
     end = markets.last_closed_session(ctx.now)
     n = 0
-    for d in _deals(ctx):
+    for d in deals_asof(ctx.store):
         since = d.priced or d.effective
         if not d.ipo or d.first_trade or d.withdrawn or not since or not d.symbol:
             continue
         start = dt.date.fromisoformat(since) - dt.timedelta(days=7)
         tried = ctx.store.cursor(f"first_trade_tried:{d.cik}")
-        if tried and (ctx.now.date() - dt.date.fromisoformat(tried)).days < RETRY_DAYS and (end - start).days > 30:
+        if (
+            tried
+            and (ctx.now.date() - dt.date.fromisoformat(tried)).days < RETRY_DAYS
+            and (end - start).days > RECENT_DEAL_DAYS
+        ):
             continue  # looked for recently and not found: an old deal is looked for again once a week
         found = _first_trade(ctx, d, start, end)
         if not found:

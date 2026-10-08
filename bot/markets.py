@@ -27,6 +27,7 @@ SPECIAL_CLOSURES: Set[dt.date] = {
     dt.date(2025, 1, 9),
 }
 CLOSE_HOUR_EASTERN = 16
+FILING_DELAY = dt.timedelta(hours=6)  # EDGAR disseminates until 22:00 New York: a day's filings are public by then
 
 
 def easter(year: int) -> dt.date:
@@ -80,6 +81,22 @@ def holidays(year: int) -> FrozenSet[dt.date]:
     if year >= 2022:
         out.add(_observed(dt.date(year, 6, 19)))  # Juneteenth
     return frozenset(out)
+
+
+def quarter_start(d: dt.date) -> dt.date:
+    """The first day of d's calendar quarter."""
+    return dt.date(d.year, (d.month - 1) // 3 * 3 + 1, 1)
+
+
+def next_quarter(d: dt.date) -> dt.date:
+    """The first day of the quarter after d's."""
+    q = quarter_start(d)
+    return dt.date(q.year + 1, 1, 1) if q.month == 10 else dt.date(q.year, q.month + 3, 1)
+
+
+def quarter_label(d: dt.date) -> str:
+    """2025Q3."""
+    return f"{d.year}Q{(d.month - 1) // 3 + 1}"
 
 
 def is_trading_day(d: dt.date) -> bool:
