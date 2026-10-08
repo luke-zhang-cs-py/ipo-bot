@@ -26,8 +26,8 @@ price cache, fetched on first use.
 | Setup | Passed | Failed | Skipped |
 |---|---|---|---|
 | demo (synthetic) | 14 | 0 | 1 (no knowledge cutoff to check) |
-| ipo: ipo_eval's model, 868 IPOs 2015-2023 | 9 | 4 | 2 + knowledge cutoff |
-| market: the benchmark blend, 6,150 stock-months 2009-2026 | 9 | 5 | 1 + knowledge cutoff |
+| ipo: ipo_eval's model, 868 IPOs 2015-2023 | 8 | 4 | 3 (knowledge cutoff; ranking and long-short need stock events) |
+| market: the benchmark blend, 6,150 stock-months 2009-2026 | 8 | 5 | 2 (knowledge cutoff; IPO-only claims need IPO events) |
 
 Every fairness and leak test passes in both real setups: reproducible, no change when the future is scrambled,
 both planted cheats caught, identical predictions with names masked.
