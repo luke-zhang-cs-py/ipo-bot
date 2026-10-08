@@ -21,3 +21,13 @@ def test_fit_logit_matches_ipo_eval():
         X = np.array([[f[k] for k in names] for f in feats])
         fast = real_setup.fit_logit(X, np.array(ys, float), l2)
         assert np.max(np.abs(fast(X) - np.array([slow.prob(f) for f in feats]))) < 1e-9
+
+
+def test_an_ipo_event_pops_at_exactly_twenty_percent_as_in_ipo_eval():
+    import bot_benchmark as bb
+    t = real_setup.ipo_threshold()
+    for close in (11.99, 12.0, 12.01):
+        ret = close / 10.0 - 1
+        assert (ret > t) == ipo_eval.popped(ret) == (close >= 12.0), close
+    ev = bb.Event("x", "ipo", "x", None, None, t)
+    assert ev.threshold < ipo_eval.POP

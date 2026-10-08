@@ -76,10 +76,12 @@ def spy_regimes(months):
             continue
         rets = [spy[keys[k]] / spy[keys[k - 1]] - 1 for k in range(j - 5, j + 1)]
         vols[m] = statistics.pstdev(rets)
-    med = statistics.median(vols.values()) if vols else 0.0
+    seen = []                                      # the volatilities of the months up to and including m
     for j, m in enumerate(keys):
         if m not in vols:
             continue
+        seen.append(vols[m])
+        med = statistics.median(seen)              # "quiet" against SPY's past only, never the months after
         r12 = spy[m] / spy[keys[j - 12]] - 1
         dd = spy[m] / max(spy[keys[k]] for k in range(j - 12, j + 1)) - 1
         if dd <= -0.10:

@@ -346,7 +346,10 @@ def auc(p, y) -> float:
 
 
 def hit_rate(p, y) -> float:
-    return float(np.mean((np.asarray(p) > 0.5) == (np.asarray(y) == 1)))
+    """Share of events whose side of 0.5 was right. A probability of exactly 0.5 calls neither side, so it
+    scores half a hit rather than counting as a call of "down"."""
+    p, up = np.asarray(p, float), np.asarray(y) == 1
+    return float(np.mean(np.where(p == 0.5, 0.5, (p > 0.5) == up)))
 
 
 def oos_r2(pred, actual, benchmark=None) -> float:

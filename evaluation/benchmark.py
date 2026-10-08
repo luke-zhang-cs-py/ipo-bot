@@ -18,7 +18,9 @@ Limits worth knowing:
   every long-only result. Compare algorithms with each other, not with zero.
 - 12-month windows starting a month apart overlap, so t-statistics use Newey-West errors.
 - Prices are Yahoo's adjusted closes (splits and dividends), fetched for this test only and cached in
-  bench_data/ (git-ignored). No trading costs or taxes.
+  bench_data/ (git-ignored). No trading costs or taxes. The ledger's prices are as traded, so --ledger puts each
+  one in the same adjusted terms first (entry_factor): a split during the horizon is not a loss, and dividends
+  count toward the return.
 """
 import datetime as dt
 import json
@@ -76,6 +78,50 @@ def fetch(symbol, refresh=False):
     months.pop(dt.date.today().strftime("%Y-%m"), None)                                  # this month is not over
     path.write_text(json.dumps({"fetched": dt.date.today().isoformat(), "months": months}), encoding="utf-8")
     return months
+
+
+_factors = {}
+
+
+def entry_factor(symbol, day):
+    """What to multiply a price as traded on `day` by to put it in fetch()'s terms: Yahoo's adjusted closes,
+    which divide earlier prices by every later split and shrink them by every later dividend.
+
+    The ledger logs the price as traded, so a 4-for-1 split during the horizon would otherwise read as a 75%
+    loss. Yahoo's quote close is already split-adjusted (adjclose / close is the dividend part only), so the
+    splits after `day` are undone from the split events. None when Yahoo has no close on or before `day`."""
+    key = (symbol, day)
+    if key not in _factors:
+        d = dt.date.fromisoformat(day)
+        p1 = int(dt.datetime(d.year, d.month, d.day, tzinfo=dt.timezone.utc).timestamp()) - 10 * 86400
+        p2 = int(dt.datetime.now(dt.timezone.utc).timestamp())
+        url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+               f"?period1={p1}&period2={p2}&interval=1d&events=div%2Csplit")
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            res = json.loads(r.read())["chart"]["result"][0]
+        _factors[key] = chart_factor(res, d)
+    return _factors[key]
+
+
+def chart_factor(res, d):
+    """entry_factor's arithmetic on a Yahoo chart result: (adjclose / close) on the last day on or before d,
+    divided by every split after d."""
+    closes = res["indicators"]["quote"][0]["close"]
+    adj = res["indicators"]["adjclose"][0]["adjclose"]
+    dividend = None
+    for ts, c, a in zip(res.get("timestamp") or [], closes, adj):
+        if dt.datetime.fromtimestamp(ts, dt.timezone.utc).date() > d:
+            break
+        if c and a:
+            dividend = a / c
+    if dividend is None:
+        return None
+    splits = 1.0
+    for s in ((res.get("events") or {}).get("splits") or {}).values():
+        if dt.datetime.fromtimestamp(s["date"], dt.timezone.utc).date() > d and s.get("numerator") and s.get("denominator"):
+            splits *= s["numerator"] / s["denominator"]
+    return dividend / splits
 
 
 def panel(symbols, refresh=False):
@@ -287,20 +333,25 @@ def score_ledger(refresh=False):
     if pending:
         lines.append("Next to mature: " + ", ".join(f"{r['symbol']} ({due:%b %Y})"
                                                     for r, _, due in sorted(pending, key=lambda x: x[2])[:5]))
-    hits = 0
+    hits = scored = 0
     for r, made, due in matured:
         months = fetch(r["symbol"], refresh)
         end = (due - dt.timedelta(days=1)).strftime("%Y-%m")
         if end not in months:
             lines.append(f"- {r['symbol']}: no price for {end}")
             continue
-        realised = months[end] / r["price"] - 1
+        factor = entry_factor(r["symbol"], r.get("price_date") or r["date"])
+        if not factor:
+            lines.append(f"- {r['symbol']}: no adjusted price for {r.get('price_date') or r['date']}")
+            continue
+        realised = months[end] / (r["price"] * factor) - 1     # both in adjusted terms: a split is not a loss
         said_up = r["expected_return_pct"] > 0
         hits += said_up == (realised > 0)
+        scored += 1
         lines.append(f"- {r['date']} {r['symbol']} {r['rating']}: expected {r['expected_return_pct']:+.1f}%, "
                      f"got {100 * realised:+.1f}%")
-    if matured:
-        lines.append(f"Direction right on {hits} of {len(matured)}.")
+    if scored:                                                    # the ones skipped above are not misses
+        lines.append(f"Direction right on {hits} of {scored}.")
     return "\n".join(lines)
 
 

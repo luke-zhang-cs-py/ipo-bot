@@ -120,7 +120,7 @@ class Sec:
 
 def prospectus_hits(sec, year):
     """Every 424B4 filed in the year: {adsh, cik, name, ticker, file, file_date, sic}."""
-    out, start = [], 0
+    out = []
     for half in ((f"{year}-01-01", f"{year}-06-30"), (f"{year}-07-01", f"{year}-12-31")):
         start = 0
         while True:

@@ -11,8 +11,9 @@ latency and broker outages are not tested. src/paper.py with --alpaca is the liv
 The signal (fixed in advance; a test signal, not a recommendation): after each close, a stock in the benchmark's
 30 US large caps that closed at a 20-day high while its 50-day average was above its 200-day is a buy at the
 next open, with its stop at the 20-day low. Each morning: open positions whose stop was crossed are sold (at
-the stop, or the open if it gapped below); new signals go through the monitor and every rule; the book is
-marked at the close, and the day's loss and the account's high feed the guardrails for the next morning.
+the stop, or the open if it gapped below); new signals go through the monitor and every rule, and what fills
+at the open is held against the same day's low (sold at its stop if the low reaches it); the book is marked at
+the close, and the day's loss and the account's high feed the guardrails for the next morning.
 """
 import datetime as dt
 import json
@@ -49,7 +50,9 @@ RULES = {"max_position_pct": 10, "max_sector_pct": 30, "risk_per_trade_pct": 0.5
 
 
 def bars(symbol, days=420):
-    """[(date, open, high, low, close, volume)] for the last `days` calendar days, unadjusted (as traded)."""
+    """[(date, open, high, low, close, volume)] for the last `days` calendar days. Yahoo's quote prices are
+    split-adjusted (earlier days divided by every later split) but not dividend-adjusted. [] when Yahoo fails
+    three times; callers check for missing symbols (tracker.run refuses to run without the full universe)."""
     t1 = int(time.time())
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?period1={t1 - days * 86400}&period2={t1}&interval=1d"
     for attempt in range(3):
@@ -77,6 +80,8 @@ def signal_on(rows, i):
 
 def replay(data, days=10, log=None):
     """data: {symbol: bars}. Returns (log lines, daily account rows, exits)."""
+    if not data:
+        raise ValueError("no price history for any symbol: nothing to replay")
     calendar = sorted(set.intersection(*(set(r[0] for r in rows) for rows in data.values())))
     run_days = calendar[-days:]
     by = {s: {r[0]: k for k, r in enumerate(rows)} for s, rows in data.items()}
@@ -87,9 +92,10 @@ def replay(data, days=10, log=None):
     log = log or (ROOT / "forecasts" / "paper" / f"replay_{dt.date.today().isoformat()}.jsonl")
     if log.exists():
         log.unlink()
-    for day in run_days:
-        # 1. stops crossed overnight or during the day: sold at the stop, or at the open below it
-        for s in list(positions):
+    def stop_out(day, symbols):
+        """Sell each of `symbols` whose stop the day's low crossed: at the stop, or at the open below it."""
+        nonlocal cash
+        for s in symbols:
             o, lo = data[s][by[s][day]][1], data[s][by[s][day]][3]
             pos = positions[s]
             if lo <= pos["stop"]:
@@ -99,6 +105,10 @@ def replay(data, days=10, log=None):
                               "pnl": round(pos["shares"] * px - pos["cost"], 2)})
                 watch.record_exit(day, s, stopped=True)
                 del positions[s]
+
+    for day in run_days:
+        # 1. stops crossed overnight or during the day: sold at the stop, or at the open below it
+        stop_out(day, list(positions))
         # 2. the morning's signals, from yesterday's close, through the monitor, the rules and the broker
         i_prev = {s: by[s][day] - 1 for s in data}
         open_equity = cash + sum(p["shares"] * data[s][by[s][day]][1] for s, p in positions.items())
@@ -123,14 +133,18 @@ def replay(data, days=10, log=None):
                             "quote": {"bid": quotes[s]["bid"], "ask": quotes[s]["ask"], "time": when}})
         broker = execution.BarBroker(day_bars, fee_rate=FEE)
         day_lines = paper.run(signals, view, broker, log=log, monitor=watch, now=when)
+        bought = []
         for ln in day_lines:
             r = ln["result"]
             if r.get("filled"):
                 spent = r["filled"] * r["avg_price"] + r.get("fees", 0.0)
                 cash -= spent
                 positions[r["symbol"]] = {"shares": r["filled"], "stop": ln["signal"]["stop"], "cost": spent}
+                bought.append(r["symbol"])
             ln["day"] = day
         lines += day_lines
+        # a position bought at the open is live for the rest of the day: today's low can take out its stop too
+        stop_out(day, bought)
         # 3. the close: mark the book; the high and the day's result feed tomorrow's guardrails
         equity = cash + sum(p["shares"] * data[s][by[s][day]][4] for s, p in positions.items())
         high = max(high, equity)
@@ -150,14 +164,17 @@ def main(argv):
     symbols = bm.UNIVERSES["US large caps"]
     data = {s: bars(s) for s in symbols}
     data = {s: rows for s, rows in data.items() if len(rows) > 230}
+    missing = [s for s in symbols if s not in data]
     spy = bars("SPY")
+    if not spy:
+        raise SystemExit("no prices for SPY from Yahoo; try again later")
     lines, account, exits = replay(data, days)
     d = paper.divergence(lines)
     first, last = account[0], account[-1]
     spy_by = {r[0]: r for r in spy}
     spy_ret = spy_by[last["day"]][4] / spy_by[first["day"]][1] - 1
     out = [f"# Paper trading replay: {first['day']} to {last['day']} ({len(account)} trading days)", "",
-           f"{len(data)} large caps; ${START_CASH:,.0f} to start; every guardrail on (0.5% risk a trade, $15,000 an order, 80% "
+           f"{len(data)} large caps{' (no prices for ' + ', '.join(missing) + ')' if missing else ''}; ${START_CASH:,.0f} to start; every guardrail on (0.5% risk a trade, $15,000 an order, 80% "
            "gross exposure, 2% daily loss, 8% drawdown, 1% of volume). Real prices and volumes, a simulated order book.", "",
            "| Day | signals | filled | positions | equity |", "|---|---|---|---|---|"]
     out += [f"| {a['day']} | {a['signals']} | {a['filled']} | {a['positions']} | ${a['equity']:,.2f} |" for a in account]

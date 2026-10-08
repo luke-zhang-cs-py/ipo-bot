@@ -90,8 +90,34 @@ def test_the_ledger_scores_matured_forecasts_and_lists_pending(tmp_path, monkeyp
     ledger.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     monkeypatch.setattr(benchmark, "LEDGER", ledger)
     monkeypatch.setattr(benchmark, "fetch", lambda s, refresh=False: {"2025-12": 130.0})
+    monkeypatch.setattr(benchmark, "entry_factor", lambda s, day: 1.0)
     text = benchmark.score_ledger()
     assert "1 matured, 1 pending" in text and "got +30.0%" in text and "Direction right on 1 of 1" in text
+
+
+def test_a_split_during_the_horizon_is_not_a_loss_and_unpriced_forecasts_are_not_misses(tmp_path, monkeypatch):
+    ledger = tmp_path / "ledger.jsonl"
+    rows = [{"date": "2025-01-15", "symbol": s, "rating": "Overweight", "expected_return_pct": 20, "price": 400,
+             "price_date": "2025-01-14", "horizon_months": 12} for s in ("AAA", "BBB")]
+    ledger.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    monkeypatch.setattr(benchmark, "LEDGER", ledger)
+    # AAA split 4-for-1 during the year and ends at 110 in adjusted terms: up 10%, not down 72.5%. BBB has no price.
+    monkeypatch.setattr(benchmark, "fetch", lambda s, refresh=False: {"2025-12": 110.0} if s == "AAA" else {})
+    monkeypatch.setattr(benchmark, "entry_factor", lambda s, day: 0.25)
+    text = benchmark.score_ledger()
+    assert "got +10.0%" in text and "BBB: no price" in text
+    assert "Direction right on 1 of 1." in text                  # BBB was never scored, so it is not a miss
+
+
+def test_the_entry_factor_undoes_later_splits_and_carries_the_dividend_adjustment():
+    day = lambda d: int(dt.datetime(2025, 1, d, tzinfo=dt.timezone.utc).timestamp())
+    res = {"timestamp": [day(13), day(14), day(15)],
+           "indicators": {"quote": [{"close": [99.0, 100.0, 101.0]}], "adjclose": [{"adjclose": [97.02, 98.0, 98.98]}]},
+           "events": {"splits": {"a": {"date": day(15), "numerator": 4, "denominator": 1},
+                                 "b": {"date": day(2), "numerator": 2, "denominator": 1}}}}   # before: already in the price
+    f = benchmark.chart_factor(res, dt.date(2025, 1, 14))
+    assert abs(f - 0.98 / 4) < 1e-12
+    assert benchmark.chart_factor(res, dt.date(2025, 1, 1)) is None   # no close on or before the day
 
 
 def test_the_stress_test_keeps_its_forecasts_out_of_the_real_ledger():

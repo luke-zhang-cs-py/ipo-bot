@@ -47,7 +47,8 @@ def drawdown(xs):
 
 
 def boot(ra, rs, stat, n=1000, seed=3):
-    """A 95% interval for a statistic of the paired daily returns, resampling the days."""
+    """A 95% interval for a statistic of the paired daily returns, resampling the days. (nan, nan) when the
+    statistic cannot be computed on any resample (an account that stayed in cash has no correlation)."""
     rng = random.Random(seed)
     k = len(ra)
     vals = []
@@ -57,6 +58,8 @@ def boot(ra, rs, stat, n=1000, seed=3):
             vals.append(stat([ra[i] for i in idx], [rs[i] for i in idx]))
         except (statistics.StatisticsError, ZeroDivisionError):
             continue
+    if not vals:
+        return float("nan"), float("nan")
     vals.sort()
     return vals[int(0.025 * (len(vals) - 1))], vals[int(0.975 * (len(vals) - 1))]
 
@@ -105,6 +108,12 @@ def run():
     data = {s: R.bars(s, days=span) for s in symbols}
     data = {s: rows for s, rows in data.items() if len(rows) > 230}
     spy_rows = R.bars("SPY", days=span)
+    # A symbol Yahoo didn't return would quietly turn this into a run on a different universe, and track.json
+    # would compare it with runs on the full one. Stop instead, and say which are missing.
+    missing = [s for s in symbols if s not in data] + ([] if spy_rows else ["SPY"])
+    if missing:
+        raise RuntimeError(f"no usable price history for {', '.join(missing)} (Yahoo failed or the history is "
+                           "too short); nothing written. Run again later.")
     spy_hist = {r[0]: r[4] for r in spy_rows}
     calendar = sorted(set.intersection(*(set(r[0] for r in rows) for rows in data.values())))
     days = len([d for d in calendar if d >= TRACK_START])
@@ -115,7 +124,8 @@ def run():
     entry = {"run": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), **acc,
              "signals": div["signals"], "outcomes": div["outcomes"], "fill_rate": div["fill_rate_of_planned_shares"],
              "mean_slippage": div["mean_slippage_vs_signal"], "stops_hit": len(exits),
-             "lookahead_checked": len(look_days), "lookahead_found": len(look_bad)}
+             "lookahead_checked": len(look_days), "lookahead_found": len(look_bad),
+             "universe": len(data), "missing": missing}
     OUT.mkdir(exist_ok=True)
     path = OUT / "track.json"
     lines = [x for x in path.read_text(encoding="utf-8").splitlines() if x.strip()] if path.exists() else []

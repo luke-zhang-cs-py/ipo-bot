@@ -163,7 +163,7 @@ def test_sensitivity_ranks_the_real_signal_first_and_noise_near_zero():
 def test_slippage_only_costs_and_scales_with_its_size():
     dev, _ = E.split(ROWS)
     folds = E.walk_forward(dev, MARKET)
-    runs = [E.at_open(folds, s) for s in E.SLIPPAGE]
+    runs = [E.at_open(folds, s) for s in E.FRICTION]
     for key in runs[0]:
         means = [r[key]["mean"] for r in runs]
         assert means == sorted(means, reverse=True), key
@@ -249,3 +249,14 @@ def test_confidence_intervals_bracket_the_estimate_and_narrow_with_more_data():
     assert (hi2 - lo2) > (hi - lo)                                   # a quarter of the IPOs: a wider interval
     assert E.p_text(1 / 1001).startswith("p < 0.001") and E.p_text(0.0421) == "p = 0.042"
     assert E.share(280, 696) == "40.2% (280 of 696)"
+
+
+def test_a_first_day_of_exactly_twenty_percent_is_a_pop():
+    r = {"offer_price": 10.0, "prices": {"close": 12.0}}
+    assert E.first_day(r) < E.POP                                  # 0.19999999999999996: why the tolerance exists
+    assert E.popped(E.first_day(r)) and not E.popped(E.first_day({"offer_price": 10.0, "prices": {"close": 11.99}}))
+
+
+def test_a_confidence_interval_with_no_usable_resample_is_nan_not_a_crash():
+    lo, hi = E.bootstrap_ci([0.3, 0.6, 0.9], [1, 1, 1], n=20)        # every resample is all pops: no interval
+    assert math.isnan(lo) and math.isnan(hi)

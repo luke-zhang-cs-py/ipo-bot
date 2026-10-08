@@ -304,8 +304,15 @@ def ledger_calibration(refresh=False):
             continue
         end = (due - dt.timedelta(days=1)).strftime("%Y-%m")
         prices = bm.fetch(r["symbol"], refresh)
-        if end in prices:
-            done.append({**r, "realised": prices[end] / r["price"] - 1, "end_price": prices[end]})
+        if end not in prices:
+            continue
+        # The logged price and scenario values are as traded; the closes are adjusted. Put the forecast in the
+        # closes' terms (bm.entry_factor) so a split during the horizon is not a crash past the bear case.
+        factor = bm.entry_factor(r["symbol"], r.get("price_date") or r["date"])
+        if not factor:
+            continue
+        scaled = {k: r[k] * factor for k in ("price", "bull_value", "bear_value") if r.get(k) is not None}
+        done.append({**r, **scaled, "realised": prices[end] / scaled["price"] - 1, "end_price": prices[end]})
     lines = [f"{len(rows)} logged, {len(done)} matured and priced."]
     if len(done) >= 2:
         f = [d["expected_return_pct"] / 100 for d in done]

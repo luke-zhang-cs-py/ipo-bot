@@ -3,8 +3,8 @@
 ipo_setup()     the pre-listing IPO model from evaluation/ipo_eval.py (same features, same logistic regression)
                 on the real IPO dataset. Each IPO's prospectus facts are stamped at pricing night (22:00 UTC the
                 evening before it lists), it is predicted at 13:00 UTC on the listing day (before the 13:30 open),
-                and its first-day return is published at 21:00 UTC (after the close). An event "pops" above
-                ipo_eval.POP (20%). Every listing from 2015 to 2023 is an event, so the walk-forward starts with
+                and its first-day return is published at 21:00 UTC (after the close). An event "pops" when its
+                first day is ipo_eval.POP (20%) or more. Every listing from 2015 to 2023 is an event, so the walk-forward starts with
                 nothing known, as it would have; 2024 on is the sealed holdout and is left out entirely.
 market_setup()  the benchmark's stock algorithms (evaluation/benchmark.py) on its 30 US large caps: each
                 month-end, next month's return. Closes are stamped at 21:00 UTC on the month-end, predictions at
@@ -32,12 +32,12 @@ sys.path.insert(0, str(EVAL.parent / "src"))
 import bot_benchmark as bb  # noqa: E402
 
 MIN_IPO_HISTORY = 100           # IPOs with known outcomes before the model is fitted; until then, the base rate
-MIN_MARKET_HISTORY = 300
+MIN_MARKET_HISTORY = 300        # stock-months with known outcomes before an algorithm's map from score is fitted
 PRICING_HOUR = -2               # IPO facts are public at 22:00 UTC the evening before the listing day
 PREDICT_HOUR = 13               # IPO predictions at 13:00 UTC, before the 13:30 UTC (9:30 New York) open
 CLOSE_HOUR = 21                 # first-day outcomes and month-end closes at 21:00 UTC, after the 20:00 UTC close
 MONTH_PREDICT_HOUR = 22         # stock predictions an hour after the month-end close is stamped
-FACTS = ("offer", "range_lo", "range_hi", "shares", "sic", "foreign", "bank", "spy_20d")        # stock-months with known outcomes before an algorithm's map from score is fitted
+FACTS = ("offer", "range_lo", "range_hi", "shares", "sic", "foreign", "bank", "spy_20d")   # an IPO's pre-listing facts
 
 
 def fit_logit(X, y, l2=1.0, iters=25):
@@ -64,6 +64,11 @@ def _phi(x):
 
 # ----------------------------------------------------------------------------- IPOs
 
+def ipo_threshold():
+    """The IPO events' threshold: just under ipo_eval.POP, so the harness's outcome > threshold matches popped()."""
+    import ipo_eval
+    return ipo_eval.POP - ipo_eval.POP_TOL
+
 def ipo_store():
     import ipo_data
     import ipo_eval
@@ -88,7 +93,9 @@ def ipo_store():
         data += [(pricing, ent, k, v, "ipo") for k, v in facts.items()]
         eid = f"{ent}@{r['prices']['listing_date']}"
         data.append((resolve, eid, "outcome", ipo_eval.first_day(r), "ipo"))
-        events.append(bb.Event(eid, "ipo", ent, as_of, resolve, ipo_eval.POP))
+        # The harness scores an event "up" when outcome > threshold; with the threshold a hair under POP that is
+        # ipo_eval.popped (POP or more, a close of exactly 20% over the offer included), not "more than POP".
+        events.append(bb.Event(eid, "ipo", ent, as_of, resolve, ipo_threshold()))
     store = bb.PointInTimeData(pd.DataFrame(data, columns=bb.STORE_COLUMNS))
     return store, events, banks
 
@@ -145,7 +152,7 @@ class IPOModelBot:
         month = view.as_of.strftime("%Y-%m")
         if month != self.fitted_month:
             train = [self._log[e] for e in known]
-            ys = [int(known[e] > self.E.POP) for e in known]
+            ys = [int(self.E.popped(known[e])) for e in known]
             self.base = (sum(ys) / len(ys)) if ys else 0.5
             if len(train) >= MIN_IPO_HISTORY and 0 < sum(ys) < len(ys):
                 banks = self.E.bank_shares([r for r, _ in train])

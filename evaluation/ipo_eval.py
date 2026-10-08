@@ -36,6 +36,7 @@ sys.path.insert(0, str(HERE))
 import ipo_data  # noqa: E402
 
 POP = 0.20                      # a "pop": first-day close 20% or more above the offer
+POP_TOL = 1e-9                  # 12 / 10 - 1 is 0.19999999999999996 in floating point: still a pop (see popped)
 TEST_YEARS = range(2018, 2024)  # walk-forward test years; each is predicted by a model fitted on the years before
 HOLDOUT_FROM = "2024-01-01"     # IPOs listed from here on are sealed until --final, and then scored once
 REGIMES = {"normal 2018-19": (2018, 2019), "bull 2020-21": (2020, 2021), "bear, high rates 2022-23": (2022, 2023)}
@@ -45,7 +46,6 @@ WINDOWS = (None, 3)             # all earlier years, or only the last three
 FRICTION = (0.0, 0.0025, 0.005, 0.01, 0.02, 0.03)   # slippage, spread and fees together, each way
 HOLDOUT_LOG = ROOT / "bench_runs" / "ipo_holdout_log.jsonl"
 LIVE_BYTES = 150_000            # what the live scorer reads of a filing: the cover page, where the offer and range are
-SLIPPAGE = (0.0, 0.005, 0.01, 0.02)
 COVERED = 0.6                   # a year counts as well covered when this share of its IPOs still has prices
 BOOTSTRAP = 1000                # resamples for each confidence interval
 CURSE_K = (2, 5, 10)            # how steeply a retail allocation shrinks as a deal's demand grows
@@ -75,6 +75,12 @@ def split(rows, final=False):
 
 def first_day(r):
     return r["prices"]["close"] / r["offer_price"] - 1
+
+
+def popped(first_day_return):
+    """True when a first-day return is a pop: POP or more, with a hair of tolerance so that a close of exactly
+    20% over the offer counts despite floating point. The one definition; the harness uses it too."""
+    return first_day_return >= POP - POP_TOL
 
 
 def sic_group(sic):
@@ -321,6 +327,8 @@ def bootstrap_ci(scores, ys, metric=average_precision, n=BOOTSTRAP, seed=13, lev
         sy = [ys[i] for i in idx]
         if 0 < sum(sy) < k:
             vals.append(metric([scores[i] for i in idx], sy))
+    if not vals:                                   # every resample was all pops or none: no interval to give
+        return float("nan"), float("nan")
     vals.sort()
     lo, hi = vals[int((1 - level) / 2 * (len(vals) - 1))], vals[int((1 + level) / 2 * (len(vals) - 1))]
     return lo, hi
@@ -340,7 +348,7 @@ def share(k, n, d=1):
 def fit_year(train, market, names=FEATURES, l2=L2):
     banks = bank_shares(train)
     feats = [features(r, market, banks) for r in train]
-    ys = [int(first_day(r) >= POP) for r in train]
+    ys = [int(popped(first_day(r))) for r in train]
     model = Logit(names, l2).fit(feats, ys)
     train_scores = [model.prob(f) for f in feats]
     return model, banks, best_threshold(train_scores, ys), sum(ys) / len(ys)
@@ -361,7 +369,7 @@ def walk_forward(rows, market, years=TEST_YEARS, names=FEATURES, l2=L2, window=N
         model, banks, t, base = fit_year(train, market, names, l2_y)
         feats = [features(r, market, banks) for r in test]
         folds.append({"year": y, "rows": test, "feats": feats, "model": model, "threshold": t, "base_rate": base,
-                      "scores": [model.prob(f) for f in feats], "ys": [int(first_day(r) >= POP) for r in test],
+                      "scores": [model.prob(f) for f in feats], "ys": [int(popped(first_day(r))) for r in test],
                       "train_last": max(r["prices"]["listing_date"] for r in train), "l2": l2_y, "window": window_y})
     return folds
 
@@ -745,7 +753,7 @@ def report(final=False, again=False):
         train = dev
         model, banks, t, base = fit_year(train, market)
         hs = [model.prob(features(r, market, banks)) for r in hold]
-        hy = [int(first_day(r) >= POP) for r in hold]
+        hy = [int(popped(first_day(r))) for r in hold]
         lines += ["## 1. Sealed holdout", ""]
         if hy and sum(hy):
             c = scorecard(hs, hy, t, base)

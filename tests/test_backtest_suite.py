@@ -43,6 +43,20 @@ def test_a_month_is_labelled_from_spy_up_to_it_never_after(monkeypatch):
     assert {m: after[m] for m in ms if m <= "2008-06"} == {m: before[m] for m in ms if m <= "2008-06"}
 
 
+def test_how_quiet_a_month_is_is_judged_against_the_past_only(monkeypatch):
+    ms = months(2004, 60)
+    rng = random.Random(1)
+    spy = {m: 100 + (rng.random() - 0.5) * 0.5 for m in ms}                 # flat and quiet throughout
+    monkeypatch.setattr(bm, "fetch", lambda sym: dict(spy))
+    before = bs.spy_regimes(ms)
+    # make the months after 2006-06 wild (still flat on a year): the median volatility of all months jumps,
+    # but the labels up to 2006-06 must not move
+    later = {m: (v if m <= "2006-06" else 100 * (1 + 0.04 * (-1) ** k)) for k, (m, v) in enumerate(sorted(spy.items()))}
+    monkeypatch.setattr(bm, "fetch", lambda sym: dict(later))
+    after = bs.spy_regimes(ms)
+    assert {m: after[m] for m in ms if m <= "2006-06"} == {m: before[m] for m in ms if m <= "2006-06"}
+
+
 def test_a_flat_quiet_market_is_sideways(monkeypatch):
     ms = months(2004, 60)
     rng = random.Random(1)

@@ -94,8 +94,25 @@ def test_the_bots_bull_and_bear_cases_are_checked_against_their_probabilities(tm
     monkeypatch.setattr(bm, "LEDGER", ledger)
     ends = {"AAA": 150, "BBB": 75, "CCC": 110, "DDD": 120}           # one bull, one bear, two in between
     monkeypatch.setattr(bm, "fetch", lambda s, refresh=False: {"2025-12": ends[s]})
+    monkeypatch.setattr(bm, "entry_factor", lambda s, day: 1.0)
     text = cal.ledger_calibration()
     assert "4 matured" in text
     assert "Bear case or beyond: happened 25% of the time; the bot gave it 20%" in text
     assert "Bull case or beyond: happened 25% of the time; the bot gave it 25%" in text
     assert "Overweight: 4 calls, expected +20.0%, realised +13.8%" in text
+
+
+def test_a_split_during_the_horizon_does_not_count_as_the_bear_case(tmp_path, monkeypatch):
+    import json
+    row = {"date": "2025-01-10", "symbol": "AAA", "rating": "Overweight", "expected_return_pct": 20, "price": 400,
+           "price_date": "2025-01-09", "horizon_months": 12, "bull_value": 560, "bull_prob": 25,
+           "bear_value": 320, "bear_prob": 20}
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    monkeypatch.setattr(bm, "LEDGER", ledger)
+    monkeypatch.setattr(bm, "fetch", lambda s, refresh=False: {"2025-12": 110.0})   # after a 4-for-1 split
+    monkeypatch.setattr(bm, "entry_factor", lambda s, day: 0.25)
+    text = cal.ledger_calibration()
+    assert "Bear case or beyond: happened 0% of the time" in text
+    assert "Bull case or beyond: happened 0% of the time" in text
+    assert "realised +10.0%" in text

@@ -61,7 +61,7 @@ on 30 US large caps, 15 country ETFs and the 9 US sector ETFs, each seeing only 
 | Chosen on 2018-2023, tested once from 2024 (recorded, not re-run) | 0 of 1 held up: rank IC +0.064 (p = 0.027) became -0.033 (p = 0.518) |
 | Five beginner bots, 2005-2026, 0.30% a round trip, against holding SPY (+10.94% a year) | DCA +0.01, rebalancing 60/40 -2.69, trend 50/200 -2.28 (fragile: +0.80 in 2005-2015, -5.25 after), mean reversion -8.36, grid -8.73 points a year |
 | The keyless bot, next-day direction of S&P 500 members, walk-forward 2017-2026 (1,196,771 predictions) | Brier 0.2503 against 0.2496 for each stock's base rate and 0.2500 for a coin flip: no edge (DM p = 0.19 after Holm) |
-| A pre-listing IPO model, walk-forward 2018-2023 (696 test IPOs) | PR-AUC 0.659 (95% CI 0.594 to 0.717) against a 0.402 base rate, p < 0.001; 2022-23 only 0.388 (0.214 to 0.559) against 0.205; bought at the open, its top fifth makes +0.80% on day 1 against +3.44% for every IPO |
+| A pre-listing IPO model, walk-forward 2018-2023 (696 test IPOs) | PR-AUC 0.683 (95% CI 0.625 to 0.734) against a 0.407 base rate, p < 0.001; 2022-23 only 0.377 (0.199 to 0.557) against 0.205; bought at the open, its top fifth makes +0.80% on day 1 against +3.44% for every IPO |
 | Paper bot replayed over 2026 on real prices, every guardrail on | +10.71% against SPY's +13.77%, beta 0.339 (95% CI 0.247 to 0.423); 33 of 86 signals (38.4%) stopped by the price-deviation guard ([`tracking/`](tracking/)) |
 
 Simple price signals give no 12-month edge that holds up, and ranges drawn from history are too narrow; both findings

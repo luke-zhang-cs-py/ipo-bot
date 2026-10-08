@@ -60,6 +60,17 @@ def test_a_stop_sells_at_the_stop_or_at_the_open_when_it_gaps_below(tmp_path):
     assert e["pnl"] < 0
 
 
+def test_a_position_bought_at_the_open_is_stopped_by_the_same_days_low(tmp_path):
+    lows = [None] * 257 + [1.0, None, None]                      # bar 257: bought at its open, then a plunge
+    data = {"AAPL": bars(rising(), lows=lows)}
+    lines, account, exits = R.replay(data, days=3, log=tmp_path / "log.jsonl")
+    bought = next(ln for ln in lines if ln["result"].get("filled"))
+    assert bought["day"] == data["AAPL"][257][0]
+    assert exits and exits[0]["day"] == bought["day"], "the same day's low should have taken out the stop"
+    assert abs(exits[0]["price"] - bought["signal"]["stop"]) < 0.01   # sold at the stop, the open was above it
+    assert account[0]["positions"] == 0
+
+
 def test_the_daily_loss_limit_set_by_yesterday_blocks_todays_buys(tmp_path, monkeypatch):
     monkeypatch.setattr(R, "RULES", {**R.RULES, "max_daily_loss_pct": 0.05})
     aapl = bars(rising(262))                                # bought on the first replay day (bar 257)
@@ -82,3 +93,22 @@ def test_tracker_accordance_measures_against_spy():
     assert a["days"] == 40 and a["days_above_200d"] == 40 and a["days_below_200d"] == 0
     assert a["invested_when_spy_above_200d"] < 0.6
     assert T.drawdown([100, 120, 90, 130]) == 90 / 120 - 1
+
+
+def test_tracker_bootstrap_gives_nan_when_no_resample_can_be_measured():
+    import math
+    import statistics
+    import tracker as T
+    lo, hi = T.boot([0.0] * 20, [0.01 * k for k in range(20)], statistics.correlation, n=50)   # an all-cash account
+    assert math.isnan(lo) and math.isnan(hi)
+
+
+def test_the_tracker_refuses_to_run_on_an_incomplete_universe(tmp_path, monkeypatch):
+    import pytest
+    import tracker as T
+    full = bars(rising(300))
+    monkeypatch.setattr(R, "bars", lambda s, days=420: [] if s in ("AAPL", "XOM") else full)
+    monkeypatch.setattr(T, "OUT", tmp_path / "tracking")
+    with pytest.raises(RuntimeError, match="AAPL, XOM"):
+        T.run()
+    assert not (tmp_path / "tracking").exists()                 # nothing recorded for a different universe

@@ -210,6 +210,11 @@ class BotBenchmark(unittest.TestCase):
                                                 f"95% CI [{ci['ci_low']:.4%}, {ci['ci_high']:.4%}] per period")
 
 
+def test_hit_rate_scores_a_coin_flip_probability_as_half_a_hit():
+    assert bb.hit_rate([0.5, 0.5], [1, 0]) == 0.5               # 0.5 calls neither side, whatever happened
+    assert bb.hit_rate([0.7, 0.2, 0.5, 0.6], [1, 0, 1, 0]) == (1 + 1 + 0.5 + 0) / 4
+
+
 if __name__ == "__main__":
     cfg = get_setup()
     factories = {"candidate": cfg["candidate"], **cfg["rivals"], **cfg["baselines"]}
