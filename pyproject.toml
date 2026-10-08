@@ -57,7 +57,7 @@ only_mutate = [
 ]
 pytest_add_cli_args_test_selection = [
     "tests/bot/test_bot_markets.py", "tests/bot/test_bot_store.py", "tests/bot/test_bot_units.py",
-    "tests/bot/test_bot_adapters.py",
+    "tests/bot/test_bot_adapters.py", "tests/bot/test_bot_exact.py",
 ]
 mutate_only_covered_lines = true
 debug = true

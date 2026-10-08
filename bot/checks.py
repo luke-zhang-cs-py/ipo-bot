@@ -24,6 +24,7 @@ from bot.config import Settings
 from bot.store import APPEND_ONLY, TABLES, Store, parse_iso
 
 Issue = Dict[str, Any]
+ROUNDING_SLACK = 0.005  # sources round the close and the day's range separately: half a percent is noise
 MACRO_SLACK_DAYS = 1  # yields post hours after the close: one more session of slack than prices
 EARLIEST_CLOSE_UTC = "T20:00:00Z"  # 16:00 New York in daylight time: no session closes earlier in UTC
 
@@ -50,9 +51,11 @@ def prices(bars: pd.DataFrame) -> List[Issue]:
         return out
     bad = bars[(bars["close"] <= 0) | (bars["open"].fillna(1) <= 0) | (bars["low"].fillna(1) <= 0)]
     out += [issue("prices", f"{r.symbol} {r.date}", f"non-positive price (close {r.close})") for r in bad.itertuples()]
-    h, lo, c = bars["high"], bars["low"], bars["close"]
+    ranged = bars[bars["high"].notna() & bars["low"].notna()]  # a source may give only the close
+    h, lo, c = ranged["high"].astype(float), ranged["low"].astype(float), ranged["close"].astype(float)
     tol = 1e-6 * c
-    inv = bars[(h.notna() & lo.notna()) & ((h + tol < lo) | (c > h + tol + 0.005 * c) | (c < lo - tol - 0.005 * c))]
+    slack = ROUNDING_SLACK * c
+    inv = ranged[(h + tol < lo) | (c > h + tol + slack) | (c < lo - tol - slack)]
     out += [
         issue("prices", f"{r.symbol} {r.date}", f"close {r.close} outside low {r.low} - high {r.high}", "warning")
         for r in inv.itertuples()

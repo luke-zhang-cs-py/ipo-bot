@@ -97,6 +97,15 @@ OPEN: list = []  # stores made by make_ctx, closed after each test
 
 
 @pytest.fixture(autouse=True)
+def fresh_calendar() -> None:
+    """The holiday table is cached per year; start each test without it, so a test always runs the real rules
+    (the mutation run depends on this: a cached year would hide a mutated rule)."""
+    from bot import markets
+
+    markets.holidays.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def close_stores() -> Iterator[None]:
     yield
     while OPEN:
