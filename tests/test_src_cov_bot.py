@@ -9,7 +9,7 @@ import sys
 from types import SimpleNamespace as NS
 
 import anthropic
-import httpx
+import types
 import pytest
 
 SRC = pathlib.Path(__file__).resolve().parents[1] / "src"
@@ -57,11 +57,17 @@ def reply(stop, *blocks):
     return NS(stop_reason=stop, content=list(blocks))
 
 
-REQ = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+# anthropic's errors read only these attributes, so no HTTP library is imported (the SDK switched libraries
+# between versions)
+REQ = types.SimpleNamespace(method="POST", url="https://api.anthropic.com/v1/messages")
+
+
+def fake_response(code):
+    return types.SimpleNamespace(status_code=code, headers={}, request=REQ)
 
 
 def status_error(cls, code):
-    return cls("boom", response=httpx.Response(code, request=REQ), body=None)
+    return cls("boom", response=fake_response(code), body=None)
 
 
 # ----------------------------------------------------------------------------- common

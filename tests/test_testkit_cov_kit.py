@@ -659,8 +659,9 @@ def test_main_runs_live_suites_through_the_client(cli, kitdir, tmp_path, capsys)
 
 def test_main_explains_a_rejected_key(cli, monkeypatch):
     import anthropic
-    import httpx
-    err = anthropic.AuthenticationError("bad key", response=httpx.Response(401, request=httpx.Request("POST", "http://x")),
+    import types
+    request = types.SimpleNamespace(method="POST", url="http://x")  # no HTTP library: the SDK switched libraries
+    err = anthropic.AuthenticationError("bad key", response=types.SimpleNamespace(status_code=401, headers={}, request=request),
                                         body=None)
 
     def reject(*a, **k):

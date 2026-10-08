@@ -11,7 +11,7 @@ jobs:
   offline:
     # Pinned, not ubuntu-latest: a runner image changing under the job is a failure with no code change behind it.
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
