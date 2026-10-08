@@ -114,7 +114,8 @@ These run on every update; the results go to the health report.
 - **Prices:**
   - duplicates within a read are dropped, with a warning;
   - prices must be above zero, with the close inside the day's range;
-  - a daily move beyond 50% is flagged unless a split or dividend on record explains it.
+  - a daily move beyond 50% is flagged (as a warning: crashes and takeovers move prices that much too) unless
+    a split or dividend on record explains it.
 - **Missing sessions:** NYSE trading days with no bar inside a symbol's history, checked against the exchange
   calendar in `bot/markets.py`. The calendar covers rule 7.2 holidays, special closures and Eastern time with
   DST.

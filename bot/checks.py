@@ -80,7 +80,9 @@ def moves(
             div = dividends.get(sym, {}).get(d[i])
             if div and abs(-div / c[i - 1] - r) < 0.05:
                 continue
-            out.append(issue("moves", f"{sym} {d[i]}", f"close moved {r:+.0%} from {c[i - 1]:.4g} to {c[i]:.4g}"))
+            # a warning, not an error: crashes and takeovers move prices this much too; it asks for a look
+            detail = f"close moved {r:+.0%} from {c[i - 1]:.4g} to {c[i]:.4g}"
+            out.append(issue("moves", f"{sym} {d[i]}", detail, "warning"))
     return out
 
 
