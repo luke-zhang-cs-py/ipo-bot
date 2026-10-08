@@ -117,8 +117,13 @@ def run():
              "mean_slippage": div["mean_slippage_vs_signal"], "stops_hit": len(exits),
              "lookahead_checked": len(look_days), "lookahead_found": len(look_bad)}
     OUT.mkdir(exist_ok=True)
-    with (OUT / "track.json").open("a", encoding="utf-8") as f:
-        f.write(json.dumps(entry) + "\n")
+    path = OUT / "track.json"
+    lines = [x for x in path.read_text(encoding="utf-8").splitlines() if x.strip()] if path.exists() else []
+    # a market holiday, or a second run the same day, measures the same last day again: replace, don't duplicate
+    if lines and json.loads(lines[-1]).get("to") == entry["to"]:
+        lines.pop()
+    lines.append(json.dumps(entry))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     (OUT / "README.md").write_text(render(entry), encoding="utf-8")
     return entry
 

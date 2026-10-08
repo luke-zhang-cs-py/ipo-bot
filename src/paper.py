@@ -98,7 +98,7 @@ def run(signals, view, broker, log=LOG, clock=time.time, monitor=None, now=None)
                               "blocked_by": str(e), "orders": [], "fees": 0.0}
                 monitor.record(result)
             if result.get("filled"):
-                view = execution._after_fill(view, result["symbol"], result["filled"], result["avg_price"], s.get("sector"))
+                view = execution.after_fill(view, result["symbol"], result["filled"], result["avg_price"], s.get("sector"))
             line = {"logged": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "signal": s, "result": result,
                     "latency_s": round(clock() - t0, 3)}
             f.write(json.dumps(line) + "\n")

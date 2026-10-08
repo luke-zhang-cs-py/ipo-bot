@@ -76,6 +76,11 @@ class PITView:
     def frame(self) -> pd.DataFrame:
         return self._frame.copy()
 
+    def subset(self, entities: Iterable[str], fields: Iterable[str]) -> pd.DataFrame:
+        """Rows for these entities and fields only, without copying the whole view (read-only)."""
+        f = self._frame
+        return f[f["entity"].isin(set(entities)) & f["field"].isin(set(fields))]
+
     def rows(self, field: str, kind: Optional[str] = None) -> pd.DataFrame:
         f = self._frame[self._frame["field"] == field]
         return f if kind is None else f[f["kind"] == kind]

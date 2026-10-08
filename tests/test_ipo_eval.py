@@ -187,7 +187,8 @@ def test_the_live_feed_never_crashes_and_stays_fast():
     st = E.stress(model, banks, n=400, burst=50)
     assert st["errors"] == 0, st["error_examples"]
     assert st["ok"] > 100 and st["unknown"] > 20               # broken feeds say "unknown"; good ones score
-    assert st["p99_ms"] < st["budget_ms"]
+    if sys.gettrace() is None:                                 # coverage and debuggers slow every line several-fold
+        assert st["p99_ms"] < st["budget_ms"]
     good = E.score_live({"prospectus": "The initial public offering price is $20.00 per share.", "opening": {"indication": 25.0}},
                         model, banks, {"spy_20d": 0, "heat_30d": 0, "deals_30d": 0})
     assert good["status"] == "ok" and abs(good["indicated_open_vs_offer"] - 0.25) < 1e-12 and 0 < good["p_pop"] < 1

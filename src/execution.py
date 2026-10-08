@@ -137,7 +137,7 @@ def execute_buy(view, signal, broker, attempts=MAX_ATTEMPTS, limit_slippage=LIMI
             spent += fill["filled"] * fill["avg_price"]
             risk_used += fill["filled"] * (fill["avg_price"] - stop)
             out["filled"] += fill["filled"]
-            current = _after_fill(current, sym, fill["filled"], fill["avg_price"], signal.get("sector"))
+            current = after_fill(current, sym, fill["filled"], fill["avg_price"], signal.get("sector"))
         if fill["status"] == "filled" or out["filled"] >= plan["shares"]:
             break
         if fill["filled"] == 0:
@@ -158,7 +158,7 @@ def execute_buy(view, signal, broker, attempts=MAX_ATTEMPTS, limit_slippage=LIMI
     return out
 
 
-def _after_fill(view, symbol, shares, price, sector):
+def after_fill(view, symbol, shares, price, sector):
     """The portfolio view after buying `shares` at `price`: cash down, the holding up, weights recomputed."""
     holdings = [dict(h) for h in view["holdings"]]
     held = next((h for h in holdings if h["symbol"] == symbol), None)

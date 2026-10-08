@@ -33,6 +33,10 @@ import bot_benchmark as bb  # noqa: E402
 
 MIN_IPO_HISTORY = 100           # IPOs with known outcomes before the model is fitted; until then, the base rate
 MIN_MARKET_HISTORY = 300
+PRICING_HOUR = -2               # IPO facts are public at 22:00 UTC the evening before the listing day
+PREDICT_HOUR = 13               # IPO predictions at 13:00 UTC, before the 13:30 UTC (9:30 New York) open
+CLOSE_HOUR = 21                 # first-day outcomes and month-end closes at 21:00 UTC, after the 20:00 UTC close
+MONTH_PREDICT_HOUR = 22         # stock predictions an hour after the month-end close is stamped
 FACTS = ("offer", "range_lo", "range_hi", "shares", "sic", "foreign", "bank", "spy_20d")        # stock-months with known outcomes before an algorithm's map from score is fitted
 
 
@@ -70,7 +74,8 @@ def ipo_store():
     data, events = [], []
     for r in rows:
         day = pd.Timestamp(r["prices"]["listing_date"])
-        pricing, as_of, resolve = day - pd.Timedelta(hours=2), day + pd.Timedelta(hours=13), day + pd.Timedelta(hours=21)
+        pricing, as_of, resolve = (day + pd.Timedelta(hours=PRICING_HOUR), day + pd.Timedelta(hours=PREDICT_HOUR),
+                                   day + pd.Timedelta(hours=CLOSE_HOUR))
         ent = r["adsh"]
         rng = r.get("range") if r.get("range") and r.get("range_date") and r["range_date"] < r["prices"]["listing_date"] else None
         try:
@@ -121,9 +126,7 @@ class IPOModelBot:
     def predict(self, view, events):
         # One pass over the view for just the IPOs asked about (training rows come from the bot's own log), instead
         # of a full-table filter per fact: same values as view.latest_many, about three times faster.
-        ents = {e.entity for e in events}
-        sub = view.frame if len(view._frame) < 1000 else view._frame[view._frame["entity"].isin(ents)]
-        sub = sub[sub["field"].isin(FACTS)].drop_duplicates(subset=["entity", "field"], keep="last")
+        sub = view.subset({e.entity for e in events}, FACTS).drop_duplicates(subset=["entity", "field"], keep="last")
         facts = {k: {} for k in FACTS}
         for ent, field, value in zip(sub["entity"], sub["field"], sub["value"]):
             facts[field][ent] = float(value)
@@ -185,10 +188,10 @@ def market_store():
     for i, ym in enumerate(months):
         end = _month_end(ym)
         for s in symbols:
-            data.append((end + pd.Timedelta(hours=21), s, "close", px[s][i], "market"))
+            data.append((end + pd.Timedelta(hours=CLOSE_HOUR), s, "close", px[s][i], "market"))
     for i in range(bm.LOOKBACK, len(months) - 1):
-        as_of = _month_end(months[i]) + pd.Timedelta(hours=22)
-        resolve = _month_end(months[i + 1]) + pd.Timedelta(hours=21)
+        as_of = _month_end(months[i]) + pd.Timedelta(hours=MONTH_PREDICT_HOUR)
+        resolve = _month_end(months[i + 1]) + pd.Timedelta(hours=CLOSE_HOUR)
         for s in symbols:
             eid = f"{s}@{months[i]}"
             data.append((resolve, eid, "outcome", px[s][i + 1] / px[s][i] - 1, "market"))
