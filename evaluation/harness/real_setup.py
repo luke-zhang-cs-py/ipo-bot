@@ -1,0 +1,230 @@
+"""ipo-bot's own data and models, in the point-in-time harness (bot_benchmark.py).
+
+ipo_setup()     the pre-listing IPO model from evaluation/ipo_eval.py (same features, same logistic regression)
+                on the real IPO dataset. Each IPO's prospectus facts are stamped at pricing night (22:00 UTC the
+                evening before it lists), it is predicted at 13:00 UTC on the listing day (before the 13:30 open),
+                and its first-day return is published at 21:00 UTC (after the close). An event "pops" above
+                ipo_eval.POP (20%). Every listing from 2015 to 2023 is an event, so the walk-forward starts with
+                nothing known, as it would have; 2024 on is the sealed holdout and is left out entirely.
+market_setup()  the benchmark's stock algorithms (evaluation/benchmark.py) on its 30 US large caps: each
+                month-end, next month's return. Closes are stamped at 21:00 UTC on the month-end, predictions at
+                22:00 UTC, the outcome at the next month-end's close.
+
+Every bot here learns only from the views it is handed: features it logged when it predicted, and outcomes
+already published. Nothing is fitted on the full history first.
+"""
+from __future__ import annotations
+
+import calendar
+import math
+import pathlib
+import statistics
+import sys
+
+import numpy as np
+import pandas as pd
+
+HERE = pathlib.Path(__file__).resolve().parent
+EVAL = HERE.parent
+sys.path.insert(0, str(EVAL))
+sys.path.insert(0, str(EVAL.parent / "src"))
+
+import bot_benchmark as bb  # noqa: E402
+
+MIN_IPO_HISTORY = 100           # IPOs with known outcomes before the model is fitted; until then, the base rate
+MIN_MARKET_HISTORY = 300
+FACTS = ("offer", "range_lo", "range_hi", "shares", "sic", "foreign", "bank", "spy_20d")        # stock-months with known outcomes before an algorithm's map from score is fitted
+
+
+def _phi(x):
+    return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+
+
+# ----------------------------------------------------------------------------- IPOs
+
+def ipo_store():
+    import ipo_data
+    import ipo_eval
+    rows = [r for r in ipo_eval.usable(ipo_data.load()) if r["prices"]["listing_date"] < ipo_eval.HOLDOUT_FROM]
+    spy20 = ipo_eval.spy_returns(ipo_eval.spy_closes())
+    banks = sorted({r["lead_bank"] for r in rows if r.get("lead_bank")})
+    bank_id = {b: k for k, b in enumerate(banks)}
+    data, events = [], []
+    for r in rows:
+        day = pd.Timestamp(r["prices"]["listing_date"])
+        pricing, as_of, resolve = day - pd.Timedelta(hours=2), day + pd.Timedelta(hours=13), day + pd.Timedelta(hours=21)
+        ent = r["adsh"]
+        rng = r.get("range") if r.get("range") and r.get("range_date") and r["range_date"] < r["prices"]["listing_date"] else None
+        try:
+            sic = float(int(r.get("sic")))
+        except (TypeError, ValueError):
+            sic = -1.0
+        facts = {"offer": r["offer_price"], "range_lo": rng[0] if rng else -1.0, "range_hi": rng[1] if rng else -1.0,
+                 "shares": r.get("shares") or -1.0, "sic": sic, "foreign": float(bool(r.get("foreign"))),
+                 "bank": float(bank_id.get(r.get("lead_bank"), -1)), "spy_20d": spy20.get(r["prices"]["listing_date"], 0.0)}
+        data += [(pricing, ent, k, v, "ipo") for k, v in facts.items()]
+        eid = f"{ent}@{r['prices']['listing_date']}"
+        data.append((resolve, eid, "outcome", ipo_eval.first_day(r), "ipo"))
+        events.append(bb.Event(eid, "ipo", ent, as_of, resolve, ipo_eval.POP))
+    store = bb.PointInTimeData(pd.DataFrame(data, columns=bb.STORE_COLUMNS))
+    return store, events, banks
+
+
+class IPOModelBot:
+    """ipo_eval's logistic regression as an online, point-in-time bot. When asked about an IPO it logs that IPO's
+    pre-listing facts and the market as it stood (SPY's last 20 days, and the first days of IPOs already
+    published in the 30 days before); once a month it refits on the logged IPOs whose outcomes are now
+    published, with a league table of banks built from those same IPOs. Until MIN_IPO_HISTORY are known it
+    predicts their base rate. Learning only from its own log keeps it honest under the harness's masking."""
+
+    def __init__(self, banks, name="ipo_model", features=None):
+        import ipo_eval
+        self.E, self.banks, self.name = ipo_eval, banks, name
+        self.features = features or ipo_eval.FEATURES
+        self.model, self.fitted_month, self.base = None, None, None
+        self._log = {}                                  # event_id -> (row, market facts at the time)
+
+    def _row(self, facts, ent, day):
+        f = {k: facts[k].get(ent, -1.0) for k in facts}
+        lo, hi = f["range_lo"], f["range_hi"]
+        return {"adsh": ent, "offer_price": f["offer"], "shares": f["shares"] if f["shares"] > 0 else None,
+                "range": [lo, hi] if lo > 0 and hi > 0 else None, "range_date": None,
+                "sic": str(int(f["sic"])) if f["sic"] >= 0 else None, "foreign": f["foreign"] > 0.5,
+                "lead_bank": self.banks[int(f["bank"])] if f["bank"] >= 0 else None,
+                "prices": {"listing_date": day}}
+
+    def predict(self, view, events):
+        # One pass over the view for just the IPOs asked about (training rows come from the bot's own log), instead
+        # of a full-table filter per fact: same values as view.latest_many, about three times faster.
+        ents = {e.entity for e in events}
+        sub = view.frame if len(view._frame) < 1000 else view._frame[view._frame["entity"].isin(ents)]
+        sub = sub[sub["field"].isin(FACTS)].drop_duplicates(subset=["entity", "field"], keep="last")
+        facts = {k: {} for k in FACTS}
+        for ent, field, value in zip(sub["entity"], sub["field"], sub["value"]):
+            facts[field][ent] = float(value)
+        res = view.resolved("ipo")
+        known = {e: y for e, y in zip(res["event_id"], res["outcome"]) if e in self._log}
+        published = sorted((self._log[e][0]["prices"]["listing_date"], y) for e, y in known.items())
+        for e in events:
+            day = pd.Timestamp(e.as_of).date().isoformat()
+            start = (pd.Timestamp(day) - pd.Timedelta(days=30)).date().isoformat()
+            prior = [y for d, y in published if start <= d < day]
+            mk = {"spy_20d": facts["spy_20d"].get(e.entity, 0.0), "heat_30d": statistics.fmean(prior) if prior else 0.0,
+                  "deals_30d": math.log1p(len(prior))}
+            self._log[e.event_id] = (self._row(facts, e.entity, day), mk)
+        month = view.as_of.strftime("%Y-%m")
+        if month != self.fitted_month:
+            train = [self._log[e] for e in known]
+            ys = [int(known[e] > self.E.POP) for e in known]
+            self.base = (sum(ys) / len(ys)) if ys else 0.5
+            if len(train) >= MIN_IPO_HISTORY and 0 < sum(ys) < len(ys):
+                banks = self.E.bank_shares([r for r, _ in train])
+                feats = [self.E.features(r, {r["adsh"]: mk}, banks) for r, mk in train]
+                self.model = (self.E.Logit(self.features).fit(feats, ys), banks)
+            else:
+                self.model = None
+            self.fitted_month = month
+        out = []
+        for e in events:
+            if self.model is None:
+                p = self.base if self.base is not None else 0.5
+            else:
+                model, banks = self.model
+                r, mk = self._log[e.event_id]
+                p = model.prob(self.E.features(r, {r["adsh"]: mk}, banks))
+            out.append((e.event_id, min(max(p, 0.01), 0.99)))
+        return pd.DataFrame(out, columns=["event_id", "prob_up"])
+
+
+def ipo_setup():
+    store, events, banks = ipo_store()
+    return {"store": store, "events": events,
+            "candidate": lambda s: IPOModelBot(banks, name="ipo_model"),
+            "rivals": {"revision_only": lambda s: IPOModelBot(banks, name="revision_only",
+                                                              features=["revision", "above_range", "below_range", "no_range"])},
+            "baselines": {"base_rate": lambda s: bb.BaseRateBot(), "coin_flip": lambda s: bb.CoinFlipBot()}}
+
+
+# ----------------------------------------------------------------------------- stocks
+
+def _month_end(ym):
+    y, m = int(ym[:4]), int(ym[5:7])
+    return pd.Timestamp(y, m, calendar.monthrange(y, m)[1])
+
+
+def market_store():
+    import benchmark as bm
+    symbols = bm.UNIVERSES["US large caps"]
+    months, px = bm.panel(symbols)
+    data, events = [], []
+    for i, ym in enumerate(months):
+        end = _month_end(ym)
+        for s in symbols:
+            data.append((end + pd.Timedelta(hours=21), s, "close", px[s][i], "market"))
+    for i in range(bm.LOOKBACK, len(months) - 1):
+        as_of = _month_end(months[i]) + pd.Timedelta(hours=22)
+        resolve = _month_end(months[i + 1]) + pd.Timedelta(hours=21)
+        for s in symbols:
+            eid = f"{s}@{months[i]}"
+            data.append((resolve, eid, "outcome", px[s][i + 1] / px[s][i] - 1, "market"))
+            events.append(bb.Event(eid, "market", s, as_of, resolve, 0.0))
+    return bb.PointInTimeData(pd.DataFrame(data, columns=bb.STORE_COLUMNS)), events
+
+
+class AlgoBot:
+    """One of benchmark.py's algorithms, scored point-in-time. Each month it computes the algorithm's score for
+    every stock from the closes in the view, logs each stock's cross-sectional rank (0 to 1), and maps rank to
+    an expected return and a probability of a rise with a line fitted on the ranks it logged earlier whose
+    outcomes are now published (falling back to the base rate until MIN_MARKET_HISTORY are known)."""
+
+    def __init__(self, algo, name):
+        import benchmark as bm
+        self.bm, self.algo, self.name = bm, algo, name
+        self._log = {}
+
+    def _scores(self, prices):
+        bm = self.bm
+        n = min(len(v) for v in prices.values())
+        series = {s: v[-n:] for s, v in prices.items()}
+        i = n - 1
+        if self.algo == "blend":
+            raw = {a: [bm.ALGORITHMS[a](series[s], i) for s in series] for a in bm.ALGORITHMS}
+            return dict(zip(series, bm.blend(raw)))
+        return {s: bm.ALGORITHMS[self.algo](series[s], i) for s in series}
+
+    def predict(self, view, events):
+        closes = view.rows("close")
+        prices = {s: g["value"].tolist() for s, g in closes.groupby("entity", sort=False)}
+        names = [e.entity for e in events]
+        scores = self._scores({s: prices[s] for s in names})
+        order = sorted(names, key=lambda s: (scores[s], s))
+        rank = {s: k / max(1, len(order) - 1) for k, s in enumerate(order)}
+        for e in events:
+            self._log[e.event_id] = rank[e.entity]
+        res = view.resolved("market")
+        pairs = [(self._log[e], y) for e, y in zip(res["event_id"], res["outcome"]) if e in self._log]
+        out = []
+        if len(pairs) >= MIN_MARKET_HISTORY:
+            x = np.array([p[0] for p in pairs])
+            y = np.array([p[1] for p in pairs])
+            b, a = np.polyfit(x, y, 1)
+            sigma = float(np.std(y - (a + b * x))) or 1e-6
+            for e in events:
+                mu = float(a + b * rank[e.entity])
+                out.append((e.event_id, min(max(_phi(mu / sigma), 0.01), 0.99), mu))
+        else:
+            past = res["outcome"].to_numpy(dtype=float)
+            p = float(np.mean(past > 0)) if len(past) else 0.5
+            mu = float(np.mean(past)) if len(past) else 0.0
+            out = [(e.event_id, min(max(p, 0.01), 0.99), mu) for e in events]
+        return pd.DataFrame(out, columns=["event_id", "prob_up", "expected_return"])
+
+
+def market_setup():
+    import benchmark as bm
+    store, events = market_store()
+    rivals = {a: (lambda s, a=a: AlgoBot(a, a)) for a in bm.ALGORITHMS}
+    return {"store": store, "events": events,
+            "candidate": lambda s: AlgoBot("blend", "blend_mom_trend_lowvol"),
+            "rivals": rivals,
+            "baselines": {"base_rate": lambda s: bb.BaseRateBot(), "coin_flip": lambda s: bb.CoinFlipBot()}}
