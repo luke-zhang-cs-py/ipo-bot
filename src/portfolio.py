@@ -186,6 +186,8 @@ def size_position(view, symbol, entry_price, stop_price, conviction="Medium", se
     if scale is None:
         raise PortfolioError(f"conviction must be one of {sorted(rules['conviction_scale'])}")
     sym = str(symbol).strip().upper()
+    if sym in view.get("unpriced", []):
+        raise PortfolioError(f"{sym} is held but has no price: its position and sector limits cannot be checked")
     held = next((h for h in view["holdings"] if h["symbol"] == sym), None)
     sector = sector or (held["sector"] if held else "Unknown")
     held_value = held["value"] if held else 0.0

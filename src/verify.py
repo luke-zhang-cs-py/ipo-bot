@@ -27,13 +27,17 @@ class BlockError(ValueError):
 def extract(memo):
     """The key_numbers object from the last ```json block in the memo."""
     blocks = re.findall(r"```json\s*(.*?)```", memo, re.S | re.I)
-    for raw in reversed(blocks):
+    bad = None
+    for raw in reversed(blocks):           # an invalid block (an example, a stray snippet) does not hide a valid one
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as e:
-            raise BlockError(f"the KEY NUMBERS block is not valid JSON (line {e.lineno}: {e.msg})") from e
+            bad = bad or e
+            continue
         if isinstance(data, dict) and isinstance(data.get("key_numbers"), dict):
             return data["key_numbers"]
+    if bad is not None:
+        raise BlockError(f"the KEY NUMBERS block is not valid JSON (line {bad.lineno}: {bad.msg})")
     raise BlockError("no ```json block with a \"key_numbers\" object")
 
 
@@ -46,7 +50,8 @@ def _num(x):
 
 
 def _input(k, name):
-    v = (k.get("inputs") or {}).get(name)
+    inputs = k.get("inputs")
+    v = inputs.get(name) if isinstance(inputs, dict) else None
     return _num(v.get("value")) if isinstance(v, dict) else None
 
 
@@ -101,6 +106,11 @@ def check(k):
 
     inputs = k.get("inputs") or {}
     outputs = k.get("outputs") or {}
+    # the block is written by a model: a wrong shape is a failed check, never a crash
+    add("inputs is an object", isinstance(inputs, dict), type(inputs).__name__)
+    add("outputs is an object", isinstance(outputs, dict), type(outputs).__name__)
+    inputs = inputs if isinstance(inputs, dict) else {}
+    outputs = outputs if isinstance(outputs, dict) else {}
     unknown = set(k.get("unknown") or [])
     sources = k.get("sources") or []
     as_of = _date(k.get("as_of"))
@@ -148,22 +158,24 @@ def check(k):
     elif ev is not None:
         add("EV has its inputs", False, "market_cap, debt or cash is missing but enterprise_value is given")
     values = {**{n: _input(k, n) for n in inputs}, "market_cap": mc, "enterprise_value": ev}
-    for m in outputs.get("multiples") or []:
+    multiples = [m for m in outputs.get("multiples") or [] if isinstance(m, dict)]
+    add("every multiple is an object", len(multiples) == len(outputs.get("multiples") or []), "")
+    for m in multiples:
         num, den, val = values.get(m.get("numerator")), values.get(m.get("denominator")), _num(m.get("value"))
         if num is None or den in (None, 0):
             add(f"multiple {m.get('name')}: inputs present", False, f"{m.get('numerator')} / {m.get('denominator')}")
         else:
             add(f"multiple {m.get('name')} recomputes", close(val, num / den, rel=0.01),
                 f"block {val}, recomputed {num / den:.4g}")
-    for seg in k.get("segments") or []:
+    for seg in [s for s in k.get("segments") or [] if isinstance(s, dict)]:
         total = values.get(seg.get("total"))
-        parts = [_num(x.get("value")) for x in seg.get("parts") or []]
+        parts = [_num(x.get("value")) if isinstance(x, dict) else None for x in seg.get("parts") or []]
         if total is not None and parts and None not in parts:
             add(f"segments add up to {seg.get('total')}", close(sum(parts), total, rel=0.01),
                 f"parts {sum(parts):,.0f}, total {total:,.0f}")
 
     # A5: one period per multiple
-    for m in outputs.get("multiples") or []:
+    for m in multiples:
         periods = {str(inputs.get(x, {}).get("period") or "") for x in (m.get("numerator"), m.get("denominator"))
                    if isinstance(inputs.get(x), dict)}
         named = str(m.get("name") or "")                 # "EV/Revenue LTM" promises LTM inputs
@@ -203,7 +215,7 @@ def check(k):
                 str(list(probs.values())))
             add("bear < base < bull", vals["bear"] < vals["base"] < vals["bull"],
                 f"{vals['bear']} / {vals['base']} / {vals['bull']}")
-            want = pwv(scen)
+            want = sum(vals[c] * probs[c] / 100 for c in vals)   # from the checked numbers, not the raw text
             add("PWV matches the probabilities and values", close(_num(scen.get("pwv")), want),
                 f"block {scen.get('pwv')}, recomputed {want:.4g}")
             ref = _num(scen.get("reference_price"))

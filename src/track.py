@@ -65,7 +65,10 @@ def closes(symbol, start, end):
 
 def close_on(symbol, day):
     """The last close on or before `day` (within a week), or None."""
-    got = closes(symbol, day - dt.timedelta(days=8), day)
+    try:
+        got = closes(symbol, day - dt.timedelta(days=8), day)
+    except (OSError, KeyError, IndexError, TypeError, ValueError):   # a delisted ticker (404), "result": null, a timeout
+        return None                                                  # the row stays pending instead of ending the report
     before = [d for d in got if d <= day]
     return got[max(before)] if before else None
 

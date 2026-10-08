@@ -37,7 +37,7 @@ source = ["bot"]
 branch = true
 
 [tool.coverage.report]
-fail_under = 100
+# the 100% gate is the bot's own (--cov-fail-under=100 in CI), so measuring src/ or evaluation/ does not "fail"
 show_missing = true
 skip_covered = true
 exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]

@@ -51,7 +51,13 @@ def build_request(memo, sources):
 
 
 def parse(text, mech):
-    data = json.loads(text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:                       # a cut-off reply (max_tokens) or no text at all
+        data = None
+    if not isinstance(data, dict):
+        return {"verdict": "fail", "checks": [], "summary": "the auditor's reply was not readable JSON",
+                "mechanical": [{"check": n, "pass": ok, "detail": d} for n, ok, d in mech]}
     seen = {c["id"]: c for c in data.get("checks", []) if c.get("id") in RULES}
     checks = [seen.get(r, {"id": r, "result": "fail", "reason": "the auditor gave no result for this rule"})
               for r in RULES]

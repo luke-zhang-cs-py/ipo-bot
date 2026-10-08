@@ -12,6 +12,7 @@ Keys come from the environment, never from this file:
 import ast
 import datetime as dt
 import html
+import http.client
 import json
 import math
 import operator
@@ -53,6 +54,8 @@ def _get(url, headers=None):
         raise ToolError(f"HTTP {e.code} from {urllib.parse.urlsplit(url).netloc}") from e
     except urllib.error.URLError as e:
         raise ToolError(f"could not reach {urllib.parse.urlsplit(url).netloc}: {e.reason}") from e
+    except (TimeoutError, OSError, http.client.HTTPException) as e:   # a read that times out or drops midway
+        raise ToolError(f"{urllib.parse.urlsplit(url).netloc} failed mid-response: {e}") from e
 
 
 def _result(source, data, note=""):
@@ -292,6 +295,10 @@ _FN = {"min": min, "max": max, "abs": abs, "round": round, "sum": lambda *a: sum
        "log": math.log, "exp": math.exp}
 
 
+MAX_EXPONENT = 100
+MAX_RESULT_BITS = 20_000     # about 6,000 digits: far beyond any real financial figure
+
+
 def _eval(node, names):
     if isinstance(node, ast.Expression):
         return _eval(node.body, names)
@@ -303,8 +310,10 @@ def _eval(node, names):
         return names[node.id]
     if isinstance(node, ast.BinOp) and type(node.op) in _BIN:
         left, right = _eval(node.left, names), _eval(node.right, names)
-        if isinstance(node.op, ast.Pow) and abs(right) > 100:
+        if isinstance(node.op, ast.Pow) and abs(right) > MAX_EXPONENT:
             raise ToolError("exponent too large")
+        if isinstance(node.op, ast.Pow) and isinstance(left, int) and left.bit_length() * abs(right) > MAX_RESULT_BITS:
+            raise ToolError("result too large")       # ((10**100)**100)**100 would build a number with millions of digits
         return _BIN[type(node.op)](left, right)
     if isinstance(node, ast.UnaryOp) and type(node.op) in _UN:
         return _UN[type(node.op)](_eval(node.operand, names))
@@ -331,6 +340,8 @@ def calculate(expression, variables=None):
         value = _eval(tree, names)
     except ZeroDivisionError as e:
         raise ToolError("division by zero") from e
+    except OverflowError as e:
+        raise ToolError("result too large for a number") from e
     return json.dumps({"expression": expr, "variables": names, "result": value})
 
 
@@ -434,7 +445,8 @@ def portfolio_size(symbol, entry_price, stop_price, conviction, sector=None, nex
     view = _portfolio_view_data()
     try:
         sized = portfolio.size_position(view, symbol, entry_price, stop_price, conviction, sector,
-                                        next_earnings=next_earnings, avg_volume=avg_volume)
+                                        next_earnings=next_earnings, avg_volume=avg_volume,
+                                        now=_cutoff())   # in a backtest the blackout is measured from its date
     except portfolio.PortfolioError as e:
         raise ToolError(str(e)) from e
     return _result("portfolio_size: the user's rules applied to the portfolio file", sized)
@@ -482,7 +494,7 @@ def record_forecast(symbol, rating, expected_return_pct, price, price_date, hori
              **({"conviction": conviction} if conviction else {})}
     if _cutoff():
         entry["backtest_as_of"] = _cutoff()
-    LEDGER.parent.mkdir(exist_ok=True)
+    LEDGER.parent.mkdir(parents=True, exist_ok=True)
     with LEDGER.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
     return _result("forecasts/ledger.jsonl", entry, "logged; score it later with evaluation/benchmark.py --ledger")
@@ -518,5 +530,5 @@ def run_tool(name, args):
         return HANDLERS[name](**args), False
     except ToolError as e:
         return f"Error: {e}", True
-    except (ValueError, TypeError, KeyError, json.JSONDecodeError) as e:
+    except (ValueError, TypeError, KeyError, ArithmeticError, json.JSONDecodeError) as e:
         return f"Error: {type(e).__name__}: {e}", True

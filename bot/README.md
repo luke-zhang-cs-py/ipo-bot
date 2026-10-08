@@ -168,7 +168,7 @@ These run on every update; the results go to the health report.
 ## Tests
 
 ```bash
-python -m pytest -q tests/bot --cov=bot --cov-branch   # offline: no network, no keys; fails under 100% coverage
+python -m pytest -q tests/bot --cov=bot --cov-branch --cov-fail-under=100   # offline: no network, no keys; fails under 100% coverage
 python -m ruff check bot tests/bot && python -m black --check bot tests/bot && python -m mypy
 mutmut run                                             # Linux only (CI runs it weekly)
 ```

@@ -21,6 +21,7 @@ import statistics
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import execution
@@ -29,6 +30,7 @@ import portfolio
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 LOG = ROOT / "forecasts" / "paper" / "log.jsonl"
+PAPER_HOST = "paper-api.alpaca.markets"
 ALPACA_PAPER = "https://paper-api.alpaca.markets"
 
 
@@ -41,7 +43,8 @@ class AlpacaPaper:
         self.secret = secret or os.environ.get("ALPACA_SECRET_KEY")
         if not (self.key_id and self.secret):
             raise execution.BrokerError("set ALPACA_KEY_ID and ALPACA_SECRET_KEY (a paper account) in .env")
-        if "paper-api" not in base:
+        parts = urllib.parse.urlsplit(base)
+        if parts.scheme != "https" or parts.hostname != PAPER_HOST:   # the keys go only to Alpaca's paper host
             raise execution.BrokerError("only Alpaca's paper endpoint is allowed here: no real orders")
         self.base, self.wait_s = base.rstrip("/"), wait_s
         self.http = http or self._http

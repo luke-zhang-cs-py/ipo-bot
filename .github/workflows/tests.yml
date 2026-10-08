@@ -25,7 +25,7 @@ jobs:
 
   bot:
     # The keyless bot: lint, types, and every test offline with no keys and no network. Coverage under 100%
-    # fails the job (fail_under in pyproject.toml), and so does a leakage test that finds the future in features.
+    # fails the job (--cov-fail-under=100), and so does a leakage test that finds the future in features.
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -37,7 +37,7 @@ jobs:
       - run: python -m ruff check bot tests/bot
       - run: python -m black --check bot tests/bot
       - run: python -m mypy
-      - run: python -m pytest -q tests/bot --cov=bot --cov-branch --cov-report=term-missing
+      - run: python -m pytest -q tests/bot --cov=bot --cov-branch --cov-report=term-missing --cov-fail-under=100
 
   mutation:
     # mutmut needs fork(), so Linux only; weekly and on demand, since it reruns the unit tests for every mutant.

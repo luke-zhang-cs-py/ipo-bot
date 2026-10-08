@@ -67,7 +67,10 @@ class Monitor:
         now = _ts(now) if now else dt.datetime.now(dt.timezone.utc)
         if q.get("time") is None:
             return "stale data: the quote has no time"
-        age = (now - _ts(q["time"])).total_seconds()
+        try:
+            age = (now - _ts(q["time"])).total_seconds()
+        except ValueError:
+            return f"stale data: the quote's time {q['time']!r} is unreadable"
         if age > self.max_quote_age_s:
             return f"stale data: the quote is {age:.0f}s old"
         bid, ask = q.get("bid"), q.get("ask")

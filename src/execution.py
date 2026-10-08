@@ -110,7 +110,9 @@ class BarBroker:
 def execute_buy(view, signal, broker, attempts=MAX_ATTEMPTS, limit_slippage=LIMIT_SLIPPAGE):
     """Size a buy under the rules and work it at the broker. signal: {symbol, entry, stop, conviction, sector?,
     next_earnings?, avg_volume?, now?}. Returns what happened, order by order:
-    {"planned", "filled", "avg_price", "loss_at_stop", "risk_budget", "status", "blocked_by", "orders": [...]}."""
+    {"planned", "filled", "avg_price", "loss_at_stop", "risk_budget", "status", "blocked_by", "orders": [...]}.
+    "planned" is the shares the risk budget allows if every share fills at the limit; "sized_at_entry" is what
+    the rules gave at the entry price."""
     sym = str(signal["symbol"]).upper()
     extra = {k: signal[k] for k in ("next_earnings", "avg_volume", "now") if signal.get(k) is not None}
     plan = portfolio.size_position(view, sym, signal["entry"], signal["stop"], signal.get("conviction", "Medium"),
@@ -122,7 +124,11 @@ def execute_buy(view, signal, broker, attempts=MAX_ATTEMPTS, limit_slippage=LIMI
         return out
     limit = round(signal["entry"] * (1 + limit_slippage), 4)
     stop = float(signal["stop"])
-    want, spent, risk_used = plan["shares"], 0.0, 0.0
+    # the plan is sized at the entry price, but a fill can come at the limit: the first order is capped so that even
+    # a fill at the limit stays inside the risk budget (the retries below are held to the same bound)
+    target = min(plan["shares"], math.floor(plan["risk_budget"] / (limit - stop)))
+    out.update(planned=target, sized_at_entry=plan["shares"])
+    want, spent, risk_used = target, 0.0, 0.0
     current = view
     for _ in range(attempts):
         try:
@@ -137,8 +143,9 @@ def execute_buy(view, signal, broker, attempts=MAX_ATTEMPTS, limit_slippage=LIMI
             spent += fill["filled"] * fill["avg_price"]
             risk_used += fill["filled"] * (fill["avg_price"] - stop)
             out["filled"] += fill["filled"]
-            current = after_fill(current, sym, fill["filled"], fill["avg_price"], signal.get("sector"))
-        if fill["status"] == "filled" or out["filled"] >= plan["shares"]:
+            current = after_fill(current, sym, fill["filled"], fill["avg_price"], signal.get("sector"),
+                                 fill.get("fee", 0.0))
+        if fill["status"] == "filled" or out["filled"] >= target:
             break
         if fill["filled"] == 0:
             break                                        # nothing traded at the limit: waiting is the user's call
@@ -146,20 +153,21 @@ def execute_buy(view, signal, broker, attempts=MAX_ATTEMPTS, limit_slippage=LIMI
         again = portfolio.size_position(current, sym, signal["entry"], stop, signal.get("conviction", "Medium"),
                                         signal.get("sector"), **extra)
         risk_room = math.floor(max(0.0, plan["risk_budget"] - risk_used) / (limit - stop))
-        want = max(0, min(plan["shares"] - out["filled"], again["shares"], risk_room))
+        want = max(0, min(target - out["filled"], again["shares"], risk_room))
         if want == 0:
             break
     out["avg_price"] = round(spent / out["filled"], 4) if out["filled"] else None
     out["loss_at_stop"] = round(risk_used, 2)
     if "status" not in out:
-        out["status"] = ("filled" if out["filled"] == plan["shares"] else "partial" if out["filled"]
-                         else out["orders"][-1]["status"])
+        out["status"] = ("filled" if out["filled"] == target else "partial" if out["filled"]
+                         else out["orders"][-1]["status"] if out["orders"] else "not submitted")
     out["stop_order"] = {"symbol": sym, "shares": out["filled"], "stop": stop} if out["filled"] else None
     return out
 
 
-def after_fill(view, symbol, shares, price, sector):
-    """The portfolio view after buying `shares` at `price`: cash down, the holding up, weights recomputed."""
+def after_fill(view, symbol, shares, price, sector, fee=0.0):
+    """The portfolio view after buying `shares` at `price`: cash down (by the fee too), the holding up, weights
+    recomputed. The guardrail state (equity high, kill switch, day's P&L) carries over unchanged."""
     holdings = [dict(h) for h in view["holdings"]]
     held = next((h for h in holdings if h["symbol"] == symbol), None)
     if held:
@@ -167,7 +175,7 @@ def after_fill(view, symbol, shares, price, sector):
     else:
         holdings.append({"symbol": symbol, "shares": shares, "cost_basis": price, "sector": sector or "Unknown",
                          "price": price, "price_date": view["as_of"]})
-    pf = {"as_of": view["as_of"], "cash": view["cash"] - shares * price, "rules": view["rules"],
-          "day_pnl": view.get("day_pnl", 0.0),
+    pf = {"as_of": view["as_of"], "cash": view["cash"] - shares * price - fee, "rules": view["rules"],
+          "day_pnl": view.get("day_pnl", 0.0), "equity_high": view.get("equity_high"), "halted": view.get("halted", False),
           "holdings": [{k: h[k] for k in ("symbol", "shares", "cost_basis", "sector", "price", "price_date")} for h in holdings]}
     return portfolio.valued(pf)
