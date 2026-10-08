@@ -47,15 +47,17 @@ testpaths = ["tests"]
 markers = ["live: reads the real network (skipped unless BOT_LIVE_TESTS=1)"]
 
 [tool.mutmut]
-# The pure core: calendar, store, parsers, checks, statistics and models. The unit tests run against each mutant
-# (the end-to-end runs are too slow to repeat per mutant; they cover the glue). CI runs this weekly on Linux.
-paths_to_mutate = [
+# The pure core: calendar, store, parsers, checks, statistics and models. All of bot/ is copied into mutmut's
+# sandbox (source_paths), only these files are mutated, and the unit tests run against each mutant (the
+# end-to-end runs are too slow to repeat per mutant; they cover the glue). CI runs this weekly on Linux.
+source_paths = ["bot"]
+only_mutate = [
     "bot/markets.py", "bot/store.py", "bot/prospectus.py", "bot/ipos.py", "bot/checks.py", "bot/stats.py",
     "bot/models.py",
 ]
-tests_dir = ["tests/bot/"]
 pytest_add_cli_args_test_selection = [
     "tests/bot/test_bot_markets.py", "tests/bot/test_bot_store.py", "tests/bot/test_bot_units.py",
     "tests/bot/test_bot_adapters.py",
 ]
 mutate_only_covered_lines = true
+debug = true
