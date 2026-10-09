@@ -17,7 +17,7 @@ import copy
 import dataclasses
 import datetime as dt
 import json
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -82,9 +82,9 @@ def ipo_walkforward(rows: pd.DataFrame, min_train: int = IPO_MIN_TRAIN, l2: floa
     quarters = sorted({markets.quarter_start(dt.date.fromisoformat(m)).isoformat() for m in rows["moment"]})
     out = []
     for q in quarters:
-        # traded before the quarter, and predicted before it too: a deal in the quarter's test rows is never in
-        # its training rows (every test row's moment is on or after q, so every training outcome came before it)
-        train = rows[rows["trade_date"].notna() & (rows["trade_date"] < q) & (rows["moment"] < q)]
+        # traded before the quarter (so predicted before it too: ipo_rows keeps a deal only if its moment is before
+        # its first trade); a deal in the quarter's test rows, whose moment is on or after q, is never trained on
+        train = rows[rows["trade_date"].notna() & (rows["trade_date"] < q)]
         nxt = markets.next_quarter(dt.date.fromisoformat(q)).isoformat()
         test = rows[(rows["moment"] >= q) & (rows["moment"] < nxt)]
         if len(train) < min_train or test.empty:
@@ -196,17 +196,28 @@ def _same(a: pd.DataFrame, b: pd.DataFrame, cols: Sequence[str]) -> float:
 
 
 def leakage_stocks(
-    closes: pd.DataFrame, macro_rows: pd.DataFrame, cutoffs: Sequence[str], seed: int = 7
+    closes: pd.DataFrame,
+    macro_rows: pd.DataFrame,
+    cutoffs: Sequence[str],
+    seed: int = 7,
+    mask: Optional[pd.DataFrame] = None,
 ) -> Dict[str, Any]:
     """Replace every close after each cutoff, and every macro value published after its decision time (22:00
     UTC), with scrambled values; the features up to the cutoff, and a model fitted on what was known at the
-    cutoff, must not change at all."""
+    cutoff, must not change at all. mask (date x symbol, data.membership): keep only the member rows, as the
+    backtest's panel does, so the test fits the models the backtest fits."""
     rng = np.random.default_rng(seed)
-    base = features.stock_panel(closes, macro_rows)
+
+    def panel(cl: pd.DataFrame, mac: pd.DataFrame) -> pd.DataFrame:
+        if mask is None:
+            return features.stock_panel(cl, mac)
+        return features.members_only(features.stock_panel(cl, mac, list(mask.columns)), mask)
+
+    base = panel(closes, macro_rows)
     worst, checks = 0.0, []
     for c in cutoffs:
         sc, sm = _scramble_after(closes, macro_rows, c, rng)
-        alt = features.stock_panel(sc, sm)
+        alt = panel(sc, sm)
         a, b = base[base["date"] <= c].reset_index(drop=True), alt[alt["date"] <= c].reset_index(drop=True)
         diff = _same(a, b, features.STOCK_FEATURES)
         # outcomes known at the cutoff's decision time: targets of sessions before it

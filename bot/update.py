@@ -137,14 +137,14 @@ def weekly(ctx: Ctx) -> Dict[str, Any]:
     ipo_rows = tracking.ipo_inputs(st, ctx.cfg.ipo_pop)
     ipo = evaluate.ipo_walkforward(ipo_rows)
     rep_i = evaluate.report(ipo, "moment", ("model", "base", "recent"))
-    syms = data.universe(st)  # every past and present member: the panel's symbols
+    syms = data.universe(st)  # every past and present member: the panel's symbols, masked as in the backtest
     closes = data.closes(st, None, [*syms, features.INDEX])
     dates = list(closes.index)
     cut_s = [dates[int(len(dates) * f)] for f in (0.5, 0.75, 0.95)] if len(dates) > 300 else dates[-3:-2]
     moments = sorted(ipo_rows["moment"]) if not ipo_rows.empty else []
     cut_i = [moments[int(len(moments) * f)] for f in (0.5, 0.9)] if len(moments) > 20 else moments[-1:]
     leak = {
-        "stock": evaluate.leakage_stocks(closes, macro, cut_s),
+        "stock": evaluate.leakage_stocks(closes, macro, cut_s, mask=data.membership(st, dates)),
         "ipo": evaluate.leakage_ipos(edgar.deals_asof(st), macro, cut_i, ctx.cfg.ipo_pop),
     }
     result = {"stock": rep_s, "ipo": rep_i, "leakage": leak, "at": ctx.at, "run_id": ctx.run_id}

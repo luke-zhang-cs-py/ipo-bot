@@ -84,8 +84,15 @@ def build(ctx: Ctx, reconciled: Optional[Sequence[Mapping[str, Any]]] = None) ->
             "edgar_daily_through": st.cursor("edgar_daily"),
         },
         "tracking": {k: {"periods": v["periods"][-8:], "warnings": v["warnings"]} for k, v in watch.items()},
+        "models": {k: _model(st, k) for k in ("stock", "ipo")},
         "alerts": alerts,
     }
+
+
+def _model(st: Any, kind: str) -> Optional[Dict[str, Any]]:
+    """The adopted model's id and shrinkage (0: every prediction is the base rate), or None before the first."""
+    m = tracking.current_model(st, kind)
+    return {"model_id": m.model_id, "shrink": m.shrink} if m else None
 
 
 def _ago(day: Any, n: int) -> str:
@@ -174,5 +181,11 @@ def markdown(r: Mapping[str, Any]) -> List[str]:
         last = t["periods"][-1]
         parts = [f"{fam} Brier {v['brier']:.4f} (n={v['n']})" for fam, v in last.items() if fam != "period"]
         lines.append(f"- {kind}, {last['period']}: " + "; ".join(parts))
+    lines += [
+        f"- {kind} model {m['model_id']}, shrinkage {m['shrink']:g}"
+        + (" (constant: the base rate)" if not m["shrink"] else "")
+        for kind, m in r.get("models", {}).items()
+        if m
+    ]
     lines += [f"- **{a}**" for a in r["alerts"]]
     return lines

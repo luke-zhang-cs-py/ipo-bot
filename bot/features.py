@@ -4,8 +4,8 @@ Stocks: a prediction for session t+1 is made at 22:00 UTC on session t (after th
 settles). Its features use closes up to t and macro values whose available_at is at or before that moment
 (the Treasury curve, posted at 18:00 New York, is often the previous day's in winter).
 
-IPOs: a prediction is made the evening the registration becomes effective (or the final prospectus appears, if
-no EFFECT notice was read), and only if that is before the first trade. Features use the filings dated by then
+IPOs: a prediction is made the evening the registration becomes effective (a deal with no EFFECT notice read is
+not predicted), and only if that is before the first trade. Features use the filings dated by then
 (never the final prospectus's shares or lead filed later), and the first-day returns of IPOs that had traded
 before that day.
 """
@@ -99,12 +99,22 @@ def stock_panel(
     return panel[["date", "symbol", *STOCK_FEATURES, *(["y", "ret"] if with_target else [])]]
 
 
+def members_only(panel: pd.DataFrame, mask: pd.DataFrame) -> pd.DataFrame:
+    """The panel's (date, symbol) rows where mask (date x symbol booleans, data.membership) is True: the rows the
+    backtest and the live model see."""
+    stacked = mask.stack()
+    keep = pd.MultiIndex.from_frame(panel[["date", "symbol"]]).isin(stacked[stacked].index)
+    return panel[keep].reset_index(drop=True)
+
+
 # ---------------------------------------------------------------------------- IPOs
 
 
 def ipo_moment(d: ipos.Deal) -> Optional[str]:
-    """The filing date the IPO prediction is made after: effectiveness, else the final prospectus."""
-    return d.effective or d.priced
+    """The filing date the IPO prediction is made after: the EFFECT notice's. A deal without one (known only by
+    its final prospectus, often filed on or after the listing day) has no prediction moment, in the backtest as
+    live (tracking predicts only deals with an EFFECT notice), so both score the same deals."""
+    return d.effective
 
 
 def popped(ret: float, pop: float) -> bool:
@@ -120,8 +130,8 @@ def ipo_rows(deals: Sequence[ipos.Deal], macro_rows: pd.DataFrame, pop: float) -
     Every feature uses only what was public by the moment's evening: ranges, shares, lead bank and the foreign
     flag from filings dated on or before it (Deal.asof, never the final prospectus filed later), the VIX by its
     available_at, and the first-day returns of IPOs that traded before the moment's day and whose final
-    prospectus (the offer) was on file by then. A deal whose moment is on or after its first trade (no EFFECT
-    notice was read and the final prospectus came out after listing) has no honest prediction and is dropped."""
+    prospectus (the offer) was on file by then. A deal with no EFFECT notice, or whose notice is dated on or
+    after its first trade, has no honest prediction and is dropped."""
     cands = []
     for d in deals:
         m = ipo_moment(d)

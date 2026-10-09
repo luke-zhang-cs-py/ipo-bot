@@ -210,7 +210,7 @@ def test_past_members_are_backfilled_once(tmp_path) -> None:
     collect.update_membership_history(ctx)
     ctx.store.put("universe", [row("ZZZ", ctx.at, 1)], "r", "2025-09-25T00:00:00Z")  # a ticker no source knows
     assert collect.backfill_leavers(ctx, ["AAA", "BBB", "DIVD", "HOLE", "SPLT"]) == 1  # GONE read, ZZZ not
-    assert not ctx.warnings and ctx.store.cursor("leaver:ZZZ") == "failed"
+    assert not ctx.warnings and ctx.store.cursor("leaver:ZZZ") == "gone"
     assert ctx.store.last_date("prices", {"symbol": "GONE"}) == DELIST_DAY.isoformat()
     calls = len(w.calls)
     assert collect.backfill_leavers(ctx, []) == 5 and len(w.calls) > calls  # the rest, never ZZZ or GONE again

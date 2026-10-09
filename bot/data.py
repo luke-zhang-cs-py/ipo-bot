@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
@@ -58,45 +59,76 @@ def _membership_rows(store: Store, at: Optional[str]) -> List[Dict[str, Any]]:
     return store.query(q, (*MEMBERSHIP_SOURCES, *([at] if at is not None else [])))
 
 
+RENAME_WINDOW = 35  # days between a ticker's leave and the same CIK's join under another for it to be a rename
+
+
 class Membership:
     """Who was in the index on each day, from the dated membership rows (Wikipedia's monthly snapshots and the
-        bot's own daily reads). A symbol's state on a day is its newest row dated on or before it. Before the first
-        snapshot of all, the "Date added" column stands in (a member if added by then; with no date, if listed in that
-    first snapshot). A
-        rename (one CIK leaving under one ticker and joining under another in the same snapshot) is followed: the
-        old ticker's days count for the new one, whose price history covers them."""
+    bot's own daily reads). A symbol's state on a day is its newest row dated on or before it. Before the first
+    snapshot of all, the "Date added" column stands in (a member if added by then; with no date, if listed in
+    that first snapshot).
+
+    A rename is followed: a ticker leaving (its first non-member row after a member one) and the same CIK (read
+    from that leave row) joining under another ticker within RENAME_WINDOW days of it, either side. The window
+    lets the two sources disagree on the day: the daily read sees a rename on the day, the monthly snapshot at
+    the next revision. The old ticker's days before the leave count for the new one, whose price history covers
+    them; a ticker later reused by another company keeps only its days after the leave."""
 
     def __init__(self, rows: Sequence[Mapping[str, Any]]):
         self.config = {r["symbol"] for r in rows if r["source"] == "config" and r["member"] == 1}
         self.events: Dict[str, List[Tuple[str, bool]]] = {}
         self.added: Dict[str, str] = {}
-        cik: Dict[str, str] = {}
+        ciks: Dict[str, List[Optional[str]]] = {}
         for r in rows:
             if r["source"] == "config":
                 continue
             self.events.setdefault(r["symbol"], []).append((r["available_at"][:10], r["member"] == 1))
+            ciks.setdefault(r["symbol"], []).append(str(r["cik"]).lstrip("0") if r["cik"] else None)
             if r["added"]:
                 self.added[r["symbol"]] = r["added"]
-            if r["cik"]:
-                cik[r["symbol"]] = str(r["cik"]).lstrip("0")
         self.first = min((ev[0][0] for ev in self.events.values()), default=None)
-        self.renamed = self._renames(cik)
+        self.renames = self._renames(ciks)
+        self.renamed = {old: new for old, new, _ in self.renames}  # old ticker -> new (the latest rename)
 
-    def _renames(self, cik: Mapping[str, str]) -> Dict[str, str]:
-        """old ticker -> new ticker, for a CIK that left under one and joined under the other on the same day."""
-        left = {s: ev[-1][0] for s, ev in self.events.items() if not ev[-1][1] and any(f for _, f in ev) and s in cik}
-        joined = {s: next(d for d, f in ev if f) for s, ev in self.events.items() if any(f for _, f in ev)}
-        out = {}
-        for old, day in left.items():
-            new = [s for s, d in joined.items() if s != old and d == day and cik.get(s) == cik[old]]
+    def _renames(self, ciks: Mapping[str, List[Optional[str]]]) -> List[Tuple[str, str, str]]:
+        """(old ticker, new ticker, the day the old one left), oldest leave first."""
+        leaves: List[Tuple[str, str, str]] = []  # (symbol, day, cik)
+        joins: List[Tuple[str, str, str]] = []
+        for sym, ev in self.events.items():
+            for i, (day, flag) in enumerate(ev):
+                if flag and (i == 0 or not ev[i - 1][1]):
+                    if ciks[sym][i]:
+                        joins.append((sym, day, str(ciks[sym][i])))
+                elif not flag and i > 0 and ev[i - 1][1]:
+                    cik = ciks[sym][i] or ciks[sym][i - 1]  # the leave row's own CIK, else the last member row's
+                    if cik:
+                        leaves.append((sym, day, cik))
+        out = []
+        for old, day, cik in sorted(leaves, key=lambda x: (x[1], x[0])):
+            d0 = dt.date.fromisoformat(day)
+            new = {
+                s
+                for s, d, c in joins
+                if s != old and c == cik and abs((dt.date.fromisoformat(d) - d0).days) <= RENAME_WINDOW
+            }
             if len(new) == 1:
-                out[old] = new[0]
+                out.append((old, new.pop(), day))
         return out
 
     def symbols(self) -> List[str]:
-        """Every symbol that was a member on some day (renamed tickers under their new name)."""
+        """Every symbol that was a member on some day (renamed tickers under their new name, unless the old
+        ticker was a member again after its last rename)."""
         ever = {s for s, ev in self.events.items() if any(f for _, f in ev)}
-        return sorted((ever | self.config) - set(self.renamed))
+        last = {old: until for old, _, until in self.renames}
+        gone = {s for s, until in last.items() if not any(f and d >= until for d, f in self.events[s])}
+        return sorted((ever | self.config) - gone)
+
+    def _target(self, new: str, until: str) -> str:
+        """Where a rename's days end up: the new ticker, or the name it was renamed to later (and so on)."""
+        for old, nxt, when in self.renames:
+            if old == new and when > until:
+                return self._target(nxt, when)
+        return new
 
     def _state(self, sym: str, days: np.ndarray) -> np.ndarray:
         ev = self.events.get(sym, [])
@@ -116,10 +148,14 @@ class Membership:
         cols: Dict[str, np.ndarray] = {}
         for s in self.symbols():
             cols[s] = np.ones(len(days), dtype=bool) if s in self.config else self._state(s, days)
-        for old, new in self.renamed.items():
-            for _ in self.renamed:  # a ticker renamed twice: its days go to the newest name
-                new = self.renamed.get(new, new)
-            cols[new] = cols[new] | self._state(old, days)
+            for old, _, until in self.renames:
+                if old == s:  # its days before a rename belong to the new ticker
+                    cols[s] = cols[s] & (days >= until)
+        for old, new, until in self.renames:
+            target = self._target(new, until)
+            if target in cols:
+                since = max((w for o, _, w in self.renames if o == old and w < until), default="")
+                cols[target] = cols[target] | (self._state(old, days) & (days >= since) & (days < until))
         return pd.DataFrame(cols, index=pd.Index(list(dates), name="date"), dtype=bool)
 
 

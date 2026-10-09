@@ -15,7 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import math
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from bot import checks, data, markets
 from bot.adapters import cboe, cboe_vix, fred, nasdaqtrader, treasury, wikipedia, wikipedia_revisions, yahoo
@@ -29,6 +29,8 @@ INDEX = "SPX"  # the S&P 500 index itself: read from both sources every day
 PRICE_DELAY = dt.timedelta(minutes=15)  # a close is published within minutes of 16:00 New York
 VIX_DELAY = dt.timedelta(minutes=30)  # the VIX settles at 16:15
 TREASURY_DELAY = dt.timedelta(hours=2)  # the Treasury posts the day's curve by 18:00 New York
+PERMANENT = ("not_found", "schema")  # failure kinds another try will not fix
+TRANSIENT = ("timeout", "rate_limited", "http", "unreachable")  # ones it may (http: a 5xx after every retry)
 
 
 def _nominal(day: str, delay: dt.timedelta) -> dt.datetime:
@@ -99,27 +101,30 @@ def update_membership_history(ctx: Ctx) -> int:
     """Backfill one membership snapshot per month, oldest first, from where the last run stopped: the page's
     revision current at 00:00 UTC on the 1st, its table read and stored with available_at = the revision's
     timestamp (members flagged 1, earlier members missing from it flagged 0). At most wiki_history_budget
-    requests a run; a month whose revision is the previous month's costs one. A revision whose table cannot be
-    read is skipped with a warning; a source failure stops here for this run. Returns the rows stored."""
+    requests a run, counted as sent (each retry of a failing read is one more); a month whose revision is the
+    previous month's costs one read. A revision whose table cannot be read is skipped with a warning; a source
+    failure stops here for this run. Returns the rows stored."""
     st = ctx.store
     cur = st.cursor(data.HISTORY)
     done, last_rev = cur.split("|", 1) if cur else ("", "")
-    spent = stored = 0
+    reads = stored = 0
+    first = ctx.http.requests
     for month in _months(ctx.cfg.history_start, ctx.now):
         if month <= done:
             continue
+        spent = max(reads, ctx.http.requests - first)  # requests sent, retries included (replay sends none)
         if spent + 2 > ctx.cfg.wiki_history_budget:
             event(ctx.log, "membership_history_paused", logging.INFO, next_month=month, requests=spent)
             break
         found = read(ctx.http, wikipedia_revisions, at=f"{month}-01T00:00:00Z")
-        spent += 1
+        reads += 1
         if not found.ok:
             ctx.warn("membership_history_failed", month=month, error=found.failures[-1][1])
             break
         if found.rows and str(found.rows[0]["revid"]) != last_rev:
             rev = found.rows[0]
             snap = read(ctx.http, wikipedia, oldid=rev["revid"], min_members=ctx.cfg.min_members)
-            spent += 1
+            reads += 1
             if snap.ok:
                 stored += _put_snapshot(ctx, snap.rows, rev["timestamp"])
             elif snap.failures[-1][1].startswith("schema"):
@@ -154,24 +159,51 @@ def _put_snapshot(ctx: Ctx, rows: Sequence[Dict[str, Any]], stamp: str) -> int:
 
 def backfill_leavers(ctx: Ctx, collecting: Sequence[str]) -> int:
     """Read the whole price history of past members that left the index (so the backtest has them on the days
-    they were members): those not collected daily, with no prices yet and not tried before, at most
-    leaver_budget a run. Each is tried once; a ticker the sources no longer know is noted, not warned about.
-    Returns how many were read."""
+    they were members): those not collected daily, with no prices yet and not settled, at most leaver_budget a
+    run. A leaver is settled once read, or once every source says the ticker is unknown or unreadable
+    (not_found, schema: noted, not warned about). A transient failure (a timeout, a 429, a 5xx) is retried on
+    a later run, after 1, 2, 4, ... days, up to LEAVER_TRIES times; the leavers still without prices are a
+    warning every run, so a gap in the backtest's survivors is never silent. Returns how many were read."""
     if ctx.cfg.symbols:
         return 0
     st = ctx.store
+    today = ctx.now.date().isoformat()
     have = {r["symbol"] for r in st.query("SELECT DISTINCT symbol FROM prices")}
-    tried = {r["name"].split(":", 1)[1] for r in st.asof("cursors") if r["name"].startswith("leaver:")}
-    skip = have | tried | set(collecting)
+    state = {r["name"].split(":", 1)[1]: r["value"] for r in st.asof("cursors") if r["name"].startswith("leaver:")}
+    skip = have | set(collecting) | {s for s, v in state.items() if not _leaver_due(v, today)}
     todo = [s for s in data.universe(st) if s not in skip][: ctx.cfg.leaver_budget]
     end = markets.last_closed_session(ctx.now)
     got = 0
     for sym in todo:
         res = update_symbol(ctx, sym, end, full=True, quiet=True)
+        if res == "failed":
+            tries = _leaver_tries(state.get(sym)) + 1
+            wait = dt.timedelta(days=2 ** (tries - 1))
+            res = f"retry:{tries}:{(ctx.now.date() + wait).isoformat()}" if tries < LEAVER_TRIES else "gave_up"
         st.set_cursor(f"leaver:{sym}", res, ctx.run_id, ctx.at)
-        got += res != "failed"
+        state[sym] = res
+        got += not res.startswith(("retry:", "gave_up", "gone"))
     ctx.count("leavers_read", got)
+    missing = sorted(s for s, v in state.items() if s not in have and v.startswith(("retry:", "gave_up", "failed")))
+    if missing:
+        ctx.warn("leavers_missing_prices", n=len(missing), symbols=missing[:25])
     return got
+
+
+LEAVER_TRIES = 6  # transient failures before a past member's backfill is given up (and warned about every run)
+
+
+def _leaver_tries(value: Optional[str]) -> int:
+    """How many transient failures a leaver's cursor records (a cursor from before retries existed: one)."""
+    if value is None:
+        return 0
+    return int(value.split(":")[1]) if value.startswith("retry:") else 1
+
+
+def _leaver_due(value: str, today: str) -> bool:
+    """Whether a leaver with this cursor is read again today: a retry whose date has come, or a failure recorded
+    before retries existed ("failed", which may have been transient)."""
+    return value == "failed" or (value.startswith("retry:") and value.split(":")[2] <= today)
 
 
 def _update_listings(ctx: Ctx, tracked: Set[str]) -> None:
@@ -204,7 +236,7 @@ def _update_listings(ctx: Ctx, tracked: Set[str]) -> None:
 
 def update_prices(ctx: Ctx, symbols: Sequence[str]) -> Dict[str, str]:
     """Bring every symbol's daily bars up to the last finished session. Returns symbol -> the source that
-    answered (or "failed")."""
+    answered (or "failed", or "gone": see update_symbol)."""
     end = markets.last_closed_session(ctx.now)
     out = {}
     for sym in [*symbols, INDEX]:
@@ -227,7 +259,9 @@ def _start(ctx: Ctx, sym: str, end: dt.date) -> Optional[dt.date]:
 
 def update_symbol(ctx: Ctx, sym: str, end: dt.date, full: bool = False, quiet: bool = False) -> str:
     """One symbol's new bars (all of them since history_start when full, as after a split). quiet: a failure
-    or a fallback is logged, not warned about (a past member's ticker the sources may no longer know).
+    or a fallback is logged, not warned about (a past member's ticker the sources may no longer know). Returns
+    the source that answered, "current" (nothing to read), "gone" (every source failed for good, see _gone) or
+    "failed" (some source failed in a way worth another try: a timeout, a 429, a 5xx).
 
     A backfilled bar dated before a split on record is stamped with the read time, not its nominal close time:
     the source has rescaled it (see store.available)."""
@@ -241,7 +275,7 @@ def update_symbol(ctx: Ctx, sym: str, end: dt.date, full: bool = False, quiet: b
             event(ctx.log, "prices_unavailable", logging.INFO, symbol=sym, errors=res.failures)
         else:
             ctx.warn("prices_failed", symbol=sym, errors=res.failures)
-        return "failed"
+        return "gone" if _gone(res.failures) else "failed"
     if res.degraded and not quiet:
         ctx.warn("prices_fallback", symbol=sym, source=res.source, errors=res.failures)
     lo, hi = start.isoformat(), end.isoformat()
@@ -269,6 +303,13 @@ def update_symbol(ctx: Ctx, sym: str, end: dt.date, full: bool = False, quiet: b
         ctx.count("split_refetches")
         return update_symbol(ctx, sym, end, full=True)
     return str(res.source)
+
+
+def _gone(failures: Sequence[Tuple[str, str]]) -> bool:
+    """Whether a failed read is final: some source said not_found or schema, and none failed in a way another try
+    could fix (a timeout, a 429, a 5xx, no connection). Cboe's CDN answers a symbol it lacks with a 403."""
+    kinds = {e.split(":", 1)[0] for _, e in failures}
+    return bool(kinds & set(PERMANENT)) and not kinds & set(TRANSIENT)
 
 
 def _last_split(*actions: Iterable[Dict[str, Any]]) -> str:

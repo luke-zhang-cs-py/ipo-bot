@@ -9,8 +9,10 @@ cannot swing a prediction.
 The stock model is shrunk toward its training base rate: a daily direction model fitted on three years of
 rows is overconfident out of time, so each fit sets aside the last CAL_SESSIONS sessions of its own training
 window, fits on the rest, and picks the shrinkage factor s (0 to 1) whose probabilities
-sigmoid(c + s * (logit - c)), c the base rate's logit, have the lowest log loss on that tail. The final model is
-fitted on the whole window and keeps s. Nothing after the training window is looked at.
+sigmoid(c + s * (logit - c)) have the lowest log loss on that tail, c the logit of the whole training window's
+base rate (the same c is used to choose s and to apply it, so the model's center is the one s was judged
+with). The final model is fitted on the whole window and keeps s and c. Nothing after the training window is
+looked at. s = 0 makes every prediction the base rate: tracking warns when such a constant model is in use.
 """
 
 from __future__ import annotations
@@ -144,8 +146,8 @@ def fit(kind: str, df: pd.DataFrame, features: Sequence[str], through: str, l2: 
 
 def shrinkage(train: pd.DataFrame, features: Sequence[str], l2: float = 1.0) -> Tuple[float, float]:
     """(s, c) for a stock model fitted on `train` (rows with outcomes): s chosen on the window's last
-    CAL_SESSIONS sessions by a fit on the sessions before them, c the whole window's base-rate logit.
-    (1.0, 0.0), no shrinkage, when the window is too short or its early part cannot be fitted."""
+    CAL_SESSIONS sessions by a fit on the sessions before them, both around c, the whole window's base-rate
+    logit. (1.0, 0.0), no shrinkage, when the window is too short or its early part cannot be fitted."""
     dates = sorted(train["date"].unique())
     if len(dates) < 2 * CAL_SESSIONS:
         return 1.0, 0.0
@@ -156,14 +158,14 @@ def shrinkage(train: pd.DataFrame, features: Sequence[str], l2: float = 1.0) -> 
     except ValueError:
         return 1.0, 0.0
     z, y = inner.logit(tail), tail["y"].to_numpy(dtype=float)
-    c0 = _logit(float(early["y"].mean()))
+    c = _logit(float(train["y"].mean()))
 
     def loss(s: float) -> float:
-        q = np.clip(_shrunk(z, s, c0), 1e-6, 1 - 1e-6)
+        q = np.clip(_shrunk(z, s, c), 1e-6, 1 - 1e-6)
         return float(-np.mean(y * np.log(q) + (1 - y) * np.log(1 - q)))
 
     s = min(SHRINK_GRID, key=lambda g: (loss(g), -g))  # ties go to less shrinkage
-    return (1.0, 0.0) if s == 1.0 else (s, _logit(float(train["y"].mean())))
+    return (1.0, 0.0) if s == 1.0 else (s, c)
 
 
 def _fit(kind: str, df: pd.DataFrame, features: Sequence[str], through: str, l2: float) -> Model:

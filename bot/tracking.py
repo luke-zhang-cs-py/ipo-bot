@@ -82,9 +82,7 @@ def stock_inputs(store: Store, at: Optional[str] = None) -> pd.DataFrame:
     panel = features.stock_panel(closes, macro_rows(store), syms)
     if panel.empty:
         return panel
-    mask = data.membership(store, list(closes.index), at).stack()
-    keep = pd.MultiIndex.from_frame(panel[["date", "symbol"]]).isin(mask[mask].index)
-    return panel[keep].reset_index(drop=True)
+    return features.members_only(panel, data.membership(store, list(closes.index), at))
 
 
 def _recent(df: pd.DataFrame) -> pd.DataFrame:
@@ -108,19 +106,21 @@ def predict(ctx: Ctx) -> Dict[str, int]:
 
 def _ensure_model(ctx: Ctx, kind: str, df: pd.DataFrame, feats: Sequence[str]) -> Optional[models.Model]:
     """The adopted model; on a fresh database, a first one fitted the way the backtest fits (stocks: the last
-    STOCK_TRAIN_DAYS sessions known now; IPOs: every resolved IPO)."""
+    STOCK_TRAIN_DAYS sessions known now; IPOs: every resolved IPO). A model shrunk all the way (s = 0, every
+    prediction the base rate) is a warning each time it is used."""
     m = current_model(ctx.store, kind)
-    if m is not None:
-        return m
-    try:
-        m = models.fit(kind, _recent(df) if kind == "stock" else df, feats, ctx.now.date().isoformat())
-    except ValueError as e:
-        ctx.warn("no_model", kind=kind, reason=str(e))
-        return None
-    note = "first model, fitted at the first run on " + (
-        f"the last {STOCK_TRAIN_DAYS} sessions" if kind == "stock" else "all resolved IPOs"
-    )
-    register(ctx, m, {"note": note}, adopted=True)
+    if m is None:
+        try:
+            m = models.fit(kind, _recent(df) if kind == "stock" else df, feats, ctx.now.date().isoformat())
+        except ValueError as e:
+            ctx.warn("no_model", kind=kind, reason=str(e))
+            return None
+        note = "first model, fitted at the first run on " + (
+            f"the last {STOCK_TRAIN_DAYS} sessions" if kind == "stock" else "all resolved IPOs"
+        )
+        register(ctx, m, {"note": note, "shrink": m.shrink}, adopted=True)
+    if m.shrink == 0.0:  # every prediction is the training base rate
+        ctx.warn("constant_model", kind=kind, model=m.model_id, shrink=m.shrink)
     return m
 
 
@@ -195,7 +195,8 @@ def predict_ipos(ctx: Ctx) -> int:
         return 0
     deals = {d.cik: d for d in edgar.deals_asof(ctx.store)}
     # only deals with an EFFECT notice and no first trade: a deal known only by its final prospectus (424B4) may
-    # already be trading, since that is often filed on or after the listing day
+    # already be trading, since that is often filed on or after the listing day. ipo_rows drops those deals too,
+    # so the backtest scores the same population; the check here is a guard
     pending = rows_df[
         [
             deals[c].effective is not None and deals[c].status(ctx.now.date()) in ("effective", "priced")
@@ -475,7 +476,10 @@ def retrain(ctx: Ctx, kind: str, holdout_days: int = 126) -> Dict[str, Any]:
         "brier_current": b_cur if current else None,
         "current": current.model_id if current else None,
         "dm": test,
+        "shrink": cand.shrink,
     }
     register(ctx, cand, metrics, adopted=adopt)
+    if adopt and cand.shrink == 0.0:
+        ctx.warn("constant_model", kind=kind, model=cand.model_id, shrink=cand.shrink)
     mirror(ctx)
     return {"adopted": adopt, **metrics, "model_id": cand.model_id}

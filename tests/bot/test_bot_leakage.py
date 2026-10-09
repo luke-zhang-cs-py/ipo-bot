@@ -48,9 +48,9 @@ def test_ipo_features_ignore_the_final_prospectus_filed_after_the_moment() -> No
 def test_a_moment_on_or_after_the_first_trade_is_dropped() -> None:
     no_effect = [f for f in AUDIT_FILINGS if f["form"] != "EFFECT"]
     d = ipos.build(no_effect, AUDIT_DOCS, {}, AUDIT_TRADE)[0]
-    assert features.ipo_moment(d) == "2021-06-14" and features.ipo_rows([d], NO_MACRO, 0.2).empty
-    same_day = {"1": {**AUDIT_TRADE["1"], "date": "2021-06-14"}}
-    assert features.ipo_rows(ipos.build(no_effect, AUDIT_DOCS, {}, same_day), NO_MACRO, 0.2).empty
+    assert features.ipo_moment(d) is None and features.ipo_rows([d], NO_MACRO, 0.2).empty  # no EFFECT: not predicted
+    same_day = {"1": {**AUDIT_TRADE["1"], "date": "2021-06-10"}}  # listed the day its EFFECT notice was filed
+    assert features.ipo_rows(ipos.build(AUDIT_FILINGS, AUDIT_DOCS, {}, same_day), NO_MACRO, 0.2).empty
     # a range filed only after the moment is not a range the prediction could use
     late = ipos.build(AUDIT_FILINGS, {"a4": AUDIT_DOCS["a4"], "a2": "{}"}, {}, {})[0]
     late.ranges = [("2021-06-11", 14.0, 16.0)]
@@ -78,6 +78,8 @@ def test_popped_has_a_float_tolerance() -> None:
 
 
 def test_a_test_quarter_deal_is_never_in_that_quarters_training_rows(monkeypatch) -> None:
+    # ipo_rows keeps a deal only if its moment is before its first trade, so a deal predicted in the quarter
+    # (A, B) trades in it too and is not among the rows traded before it
     n = 50
     rows = pd.DataFrame(
         {
@@ -87,7 +89,7 @@ def test_a_test_quarter_deal_is_never_in_that_quarters_training_rows(monkeypatch
             **{f: 0.0 for f in features.IPO_FEATURES},
             "y": [float(i % 2) for i in range(n)] + [1.0, 0.0],
             "ret": 0.1,
-            "trade_date": [f"2020-{1 + i // 5:02d}-11" for i in range(n)] + ["2021-03-31", "2021-04-06"],
+            "trade_date": [f"2020-{1 + i // 5:02d}-11" for i in range(n)] + ["2021-04-02", "2021-04-06"],
         }
     )
     seen = {}
@@ -165,7 +167,7 @@ def test_ipo_leakage_fails_when_a_row_is_predicted_after_its_first_trade(monkeyp
     deals, cuts = _deals()
     keep_late = _leaky_ipo_rows('if d.first_trade and d.first_trade["date"] <= m:', "if False:")
     for d in deals[:3]:
-        d.effective = None  # predicted at the 424B4, filed the day the stock listed
+        d.effective = d.first_trade["date"]  # an EFFECT notice dated the day the stock listed
     monkeypatch.setattr(features, "ipo_rows", keep_late)
     out = evaluate.leakage_ipos(deals, NO_MACRO, cuts, 0.2)
     assert not out["passed"] and out["moment_not_before_trade"] == 3
