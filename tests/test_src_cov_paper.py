@@ -138,7 +138,7 @@ class FakeAlpaca:
         return self.polls.pop(0)
 
 
-def test_alpaca_reports_a_logged_position_it_no_longer_holds_as_an_exit():
+def test_alpaca_reports_a_logged_position_it_no_longer_holds_as_an_exit_only_with_a_filled_sell():
     fake = FakeAlpaca(held=["KEEP"], sells={
         "STOP": [{"filled_qty": "0", "type": "limit"}, {"filled_qty": "10", "type": "stop", "filled_avg_price": "44.5",
                                                          "filled_at": "2026-10-02T15:00:00Z"}],
@@ -150,7 +150,9 @@ def test_alpaca_reports_a_logged_position_it_no_longer_holds_as_an_exit():
     assert set(out) == {"STOP", "UNDER", "OVER", "GONE"}
     assert out["STOP"] == {"symbol": "STOP", "shares": 10, "price": 44.5, "stopped": True, "day": "2026-10-02"}
     assert out["UNDER"]["stopped"] is True and out["OVER"]["stopped"] is False
-    assert out["GONE"] == {"symbol": "GONE", "shares": 10, "price": None, "stopped": False}
+    # gone with no filled sell to show for it (sold by hand, or a sim position): a note, never a priceless exit
+    assert out["GONE"] == {"symbol": "GONE", "note": "Alpaca no longer holds GONE but shows no filled sell since its buy: "
+                                                     "no exit logged"}
     assert all("side=sell" in url for _, url, _ in fake.calls if "/v2/orders?" in url)
     assert paper.AlpacaPaper("k", "s", http=FakeAlpaca(), wait_s=0.0).closed({"X": {"shares": 1, "stop": 1.0}})[0]["symbol"] == "X"
 

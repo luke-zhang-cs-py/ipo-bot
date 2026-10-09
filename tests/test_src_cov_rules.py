@@ -54,7 +54,7 @@ def test_each_case_rule_checks_what_it_names():
 def test_an_honest_no_rating_answer_without_a_block_passes_the_mechanical_part():
     for memo in (f"I can't find any company by that name.\n{D}", f"NOT RATED: no data.\n{D}"):
         _, mech = audit.build_request(memo, [])
-        assert mech == [("KEY NUMBERS block present and valid", True, "not needed: the answer gives no rating")]
+        assert mech == [("KEY NUMBERS block (not needed: not rated)", True, "not needed: the answer gives no rating")]
     _, mech = audit.build_request(f"Overweight. I can't find the 2024 figure.\n{D}", [])   # rated: a block is owed
     assert mech[0][1] is False
     _, mech = audit.build_request(f"NOT RATED\n```json\n{{bad\n```\n{D}", [])             # a broken block still fails

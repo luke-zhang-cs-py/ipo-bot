@@ -43,14 +43,23 @@ SCHEMA = {
 
 
 NO_BLOCK = "no ```json block"      # verify's reason when a memo has no KEY NUMBERS block at all
+NOT_NEEDED = "KEY NUMBERS block (not needed: not rated)"
+
+
+def own_rating(memo):
+    """The memo's own rating: the first rating word it gives (checks.RATING), or None when it gives none. A later
+    mention ("peer FOO is NOT RATED") is about something else."""
+    m = checks.RATING.search(memo)
+    return m.group(1) if m else None
 
 
 def build_request(memo, sources):
     mech = verify.check_memo(memo)
+    rating = own_rating(memo)
     if (len(mech) == 1 and not mech[0][1] and mech[0][2].startswith(NO_BLOCK)
-            and ("NOT RATED" in memo or (checks.says_unknown(memo) and not checks.rated(memo)))):
+            and (rating == "NOT RATED" or (rating is None and checks.says_unknown(memo)))):
         # NOT RATED or "can't find it": an answer with no rating has no figures to put in a block
-        mech = [(mech[0][0], True, "not needed: the answer gives no rating")]
+        mech = [(NOT_NEEDED, True, "not needed: the answer gives no rating")]
     src = json.dumps(sources or [], default=str)
     if len(src) > SOURCES_CHARS:
         src = src[:SOURCES_CHARS] + " ...[sources truncated]"

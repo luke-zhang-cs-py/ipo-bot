@@ -29,6 +29,8 @@ class SimBroker:
     ask before the price moves. impact: the fraction the price rises as an order eats through the depth.
     fail_rate: the chance an order fails outright (an API error). spike(): spreads x5 and depth / 10."""
 
+    name = "sim"                                           # recorded on each paper-log line it touches
+
     def __init__(self, quotes, impact=0.01, fail_rate=0.0, seed=7, latency_s=0.0, fee_rate=0.0):
         self.quotes = {k.upper(): dict(v) for k, v in quotes.items()}
         self.impact, self.fail_rate, self.latency_s, self.fee_rate = impact, fail_rate, latency_s, fee_rate
@@ -86,6 +88,8 @@ class BarBroker:
     resting order behind others in the queue needs: after NautilusTrader's and backtrader's bar fill rules,
     re-implemented). Each fill is capped at volume_limit of the day's volume, with zipline's quadratic impact
     price_impact x (share of volume)^2. bars: {symbol: (open, high, low, close, volume)} for the day."""
+
+    name = "bar"
 
     def __init__(self, bars, volume_limit=0.025, price_impact=0.1, fee_rate=0.0):
         self.bars = {k.upper(): v for k, v in bars.items()}

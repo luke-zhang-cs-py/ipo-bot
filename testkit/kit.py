@@ -46,6 +46,7 @@ TRAP_FUTURE_DAYS = 60             # {future_date} in traps.json: this many days 
 HORIZONS = (1, 6, 12)             # backtest returns, months after listing
 EFTS_PAGE = 100                   # hits per page from SEC full-text search
 WHY_CHARS = 400                   # how much of a failure reason a suite item keeps
+SAVED = {}                        # saved file path (without extension) -> the item name it belongs to
 
 
 def load(name):
@@ -91,7 +92,12 @@ class Runner:
     @staticmethod
     def save(suite, name, question, memo, sources, results, verdict=None):
         d = run_dir(suite)
-        name = re.sub(r"[^\w.-]", "_", str(name))      # a ticker such as BRK/B must not become a folder
+        original = str(name)
+        base = name = re.sub(r"[^\w.-]", "_", original)      # a ticker such as BRK/B must not become a folder
+        n = 2
+        # BRK/B and BRK_B clean to the same name: the second gets a suffix rather than overwriting the first
+        while SAVED.setdefault(str(d / name), original) != original:
+            name, n = f"{base}-{n}", n + 1
         lines = "\n".join(f"- [{'x' if ok else ' '}] {n}" for n, ok in results)
         audit_txt = ""
         if verdict:

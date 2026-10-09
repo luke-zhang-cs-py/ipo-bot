@@ -26,9 +26,16 @@ STOP_GUARD_COUNT, STOP_GUARD_DAYS, STOP_GUARD_PAUSE = 3, 10, 5
 KILL_FILE = HERE / "forecasts" / "paper" / "KILL"
 
 
-def _ts(v):
+def parse_time(v):
+    """A datetime or ISO string as an aware datetime; one with no offset is taken as UTC."""
     d = v if isinstance(v, dt.datetime) else dt.datetime.fromisoformat(str(v).replace("Z", "+00:00"))
     return d if d.tzinfo else d.replace(tzinfo=dt.timezone.utc)
+
+
+def utc_day(now=None):
+    """The UTC date of `now` (today when None): the same calendar as Alpaca's filled_at dates, so a run at
+    21:00 New York time (01:00 UTC the next day) and an exit filled then fall on the same day."""
+    return (parse_time(now) if now else dt.datetime.now(dt.timezone.utc)).astimezone(dt.timezone.utc).date()
 
 
 class Monitor:
@@ -51,7 +58,7 @@ class Monitor:
             return "kill switch: " + self.kill_file.name + " is present"
         if self.failures >= self.max_api_failures:
             return f"paused: {self.failures} API failures in a row"
-        today = (_ts(now) if now else dt.datetime.now(dt.timezone.utc)).date()
+        today = utc_day(now)
         days_since = lambda d: (today - dt.date.fromisoformat(d)).days
         sym = str(signal.get("symbol", "")).upper()
         recent = [d for d, s, _ in self.exits if s == sym and 0 <= days_since(d) <= self.cooldown_days]
@@ -66,11 +73,11 @@ class Monitor:
         q = signal.get("quote")
         if not q:
             return None
-        now = _ts(now) if now else dt.datetime.now(dt.timezone.utc)
+        now = parse_time(now) if now else dt.datetime.now(dt.timezone.utc)
         if q.get("time") is None:
             return "stale data: the quote has no time"
         try:
-            age = (now - _ts(q["time"])).total_seconds()
+            age = (now - parse_time(q["time"])).total_seconds()
         except ValueError:
             return f"stale data: the quote's time {q['time']!r} is unreadable"
         if age > self.max_quote_age_s:

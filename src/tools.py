@@ -67,34 +67,55 @@ def _result(source, data, note=""):
     text = json.dumps(out, default=str)
     if len(text) <= MAX_RESULT_CHARS:
         return text
-    # Too long: cut the data down (lists to their first half, long strings to their start, pass after pass) so
-    # the result stays valid JSON that the model and _live_quote can read, and say that it was cut.
+    # Too long: trim the largest values first, by only as much as the excess, step after step, so the result
+    # stays valid JSON that the model and _live_quote can read, keeps as much as fits, and says that it was cut.
     out["truncated"] = True
     out["note"] = ((note + "; ") if note else "") + "truncated: ask for a narrower request"
-    data = json.loads(json.dumps(data, default=str))       # plain JSON types, so _halve sees lists and strings
+    out["data"] = json.loads(json.dumps(data, default=str))   # plain JSON types, so _trim sees lists and strings
     while True:
-        smaller = _halve(data)
-        if smaller == data:                                # nothing left to cut (a huge flat object)
-            out["data"] = None
-            return json.dumps(out)
-        data = out["data"] = smaller
         text = json.dumps(out)
         if len(text) <= MAX_RESULT_CHARS:
             return text
+        smaller = _trim(out["data"], len(text) - MAX_RESULT_CHARS)
+        if smaller == out["data"]:                         # nothing left to cut (the source or note alone is too long)
+            out["data"] = None
+            return json.dumps(out)
+        out["data"] = smaller
 
 
-LONG_STRING = 200      # _halve cuts strings longer than this (filing text); dates, names and ids stay whole
+LONG_STRING = 200      # _trim cuts strings longer than this (filing text); dates, names and ids stay whole
 
 
-def _halve(data):
-    """data a step smaller: each list keeps its first half, each long string its first half."""
+def _size(v):
+    return len(json.dumps(v))
+
+
+def _trim(data, excess):
+    """data about `excess` characters smaller, taken from its largest part: a long string loses its end (never
+    below LONG_STRING); a list whose largest item stands out (over twice the mean) trims that item, else it drops
+    items from its end; a dict trims its largest value or, when that cannot shrink, drops its largest entries.
+    Returns data unchanged only when nothing in it can be cut."""
+    if isinstance(data, str):
+        return data[:max(LONG_STRING, len(data) - excess)] if len(data) > LONG_STRING else data
+    if not isinstance(data, (list, dict)) or not data:
+        return data
+    keys = list(range(len(data))) if isinstance(data, list) else list(data)
+    sizes = {k: _size(data[k]) for k in keys}
+    big = max(keys, key=sizes.get)
+    if isinstance(data, dict) or len(data) == 1 or sizes[big] > 2 * sum(sizes.values()) / len(data):
+        child = _trim(data[big], excess)
+        if child != data[big]:
+            return [child if k == big else data[k] for k in keys] if isinstance(data, list) else {**data, big: child}
+    drop, cut = set(), 0
+    order = reversed(keys) if isinstance(data, list) else sorted(keys, key=sizes.get, reverse=True)
+    for k in order:                                        # the list's tail, or the dict's largest entries
+        drop.add(k)
+        cut += sizes[k] + 2 + (0 if isinstance(data, list) else _size(k) + 2)   # ", " and a dict's '"key": '
+        if cut >= excess:
+            break
     if isinstance(data, list):
-        return [_halve(x) for x in data[:len(data) // 2]]
-    if isinstance(data, dict):
-        return {k: _halve(v) for k, v in data.items()}
-    if isinstance(data, str) and len(data) > LONG_STRING:
-        return data[:len(data) // 2]
-    return data
+        return [data[k] for k in keys if k not in drop]
+    return {k: v for k, v in data.items() if k not in drop}
 
 
 # ----------------------------------------------------------------------------- SEC EDGAR

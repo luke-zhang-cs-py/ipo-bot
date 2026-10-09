@@ -91,9 +91,18 @@ def test_long_filing_text_is_cut_from_its_end_and_short_fields_stay_whole(monkey
     assert 0 < len(out["data"]["text"]) < 1_000 and out["note"] == "truncated: ask for a narrower request"
 
 
-def test_data_that_cannot_shrink_is_dropped_rather_than_sent_broken(monkeypatch):
+def test_a_large_flat_object_keeps_the_entries_that_fit(monkeypatch):
     monkeypatch.setattr(tools, "MAX_RESULT_CHARS", 500)
-    out = json.loads(tools._result("flat", {f"k{i}": i for i in range(200)}))
+    flat = {f"k{i}": i for i in range(200)}
+    text = tools._result("flat", flat)
+    out = json.loads(text)
+    assert len(text) <= 500 and out["truncated"] is True
+    assert 10 < len(out["data"]) < 200 and all(flat[k] == v for k, v in out["data"].items())
+
+
+def test_data_is_dropped_when_the_source_alone_is_too_long(monkeypatch):
+    monkeypatch.setattr(tools, "MAX_RESULT_CHARS", 500)
+    out = json.loads(tools._result("s" * 600, {"a": 1}))
     assert out["data"] is None and out["truncated"] is True
 
 

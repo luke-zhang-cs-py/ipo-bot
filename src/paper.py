@@ -9,9 +9,12 @@ signals.json: [{"time": ISO, "symbol", "entry", "stop", "conviction", "sector"?,
 what the rules allowed, each order sent, each fill, and the time from signal to fill.
 
 Before the signals, a run asks the broker which of the log's open positions (its fills, less the exits already
-logged) have closed since: SimBroker when a quote's bid reaches the stop, Alpaca when the position is gone. Each
-one gets an exit line ({"exit": {"day", "symbol", "shares", "price", "stopped"}}) and goes to the monitor, so its
-cooldown and stoploss guard see stop-outs from this run and every earlier one.
+logged) have closed since: SimBroker when a quote's bid reaches the stop, Alpaca when the position is gone and
+filled sells since the buy say at what price. Each one gets an exit line ({"exit": {"day", "symbol", "shares",
+"price", "stopped"}}) and goes to the monitor, so its cooldown and stoploss guard see stop-outs from this run and
+every earlier one. Every line records its broker ("sim", "alpaca", ...): simulated runs and --alpaca runs share
+the log, and a broker is asked only about the positions it opened. A position Alpaca no longer holds with no
+filled sell to show for it gets a note line, not an exit; a broker that fails to answer gets a warning line.
 
 The forward test the brief asks for is two weeks or more of this against Alpaca's paper account: set
 ALPACA_KEY_ID and ALPACA_SECRET_KEY in .env (a free paper account; no real money moves) and run it daily.
@@ -38,11 +41,14 @@ LOG = HERE / "forecasts" / "paper" / "log.jsonl"
 PAPER_HOST = "paper-api.alpaca.markets"
 ALPACA_PAPER = "https://paper-api.alpaca.markets"
 STOP_TYPES = ("stop", "stop_limit", "trailing_stop")   # Alpaca order types that are a stop being hit
+SELL_ORDERS_LIMIT = 100       # closed sells fetched per symbol since its buy (Alpaca allows up to 500 a page)
 
 
 class AlpacaPaper:
     """Alpaca's paper-trading API with SimBroker's submit() shape: a day limit order, polled until it is done
     or `wait_s` passes, then whatever is left is cancelled. http(method, url, body) -> dict is injectable for tests."""
+
+    name = "alpaca"
 
     def __init__(self, key_id=None, secret=None, base=ALPACA_PAPER, wait_s=30.0, http=None):
         self.key_id = key_id or os.environ.get("ALPACA_KEY_ID")
@@ -87,21 +93,37 @@ class AlpacaPaper:
         return {"order_id": oid, "filled": filled, "avg_price": avg, "fee": 0.0, "status": status}
 
     def closed(self, positions):
-        """The positions (open_positions' shape) Alpaca no longer holds: each was sold, and counts as stopped when
-        a stop order sold it or the sale was at or under its stop."""
+        """The positions (open_positions' shape) Alpaca no longer holds, priced from the filled sells since the
+        position's last buy (its "since"): shares and price are those sells' total and fill-weighted average, and
+        it counts as stopped when a stop order sold some of it or the average is at or under its stop. One gone
+        with no such sell (closed by hand, or never this account's) comes back as {"symbol", "note"}, not an exit."""
         held = {str(p.get("symbol", "")).upper() for p in self.http("GET", f"{self.base}/v2/positions") or []}
         out = []
         for sym, pos in positions.items():
             if sym in held:
                 continue
-            q = urllib.parse.urlencode({"status": "closed", "symbols": sym, "side": "sell", "direction": "desc", "limit": 10})
-            sells = [o for o in self.http("GET", f"{self.base}/v2/orders?{q}") or [] if float(o.get("filled_qty") or 0) > 0]
-            sell = sells[0] if sells else {}
-            price = float(sell["filled_avg_price"]) if sell.get("filled_avg_price") else None
-            stopped = sell.get("type") in STOP_TYPES or (price is not None and price <= pos["stop"])
-            out.append({"symbol": sym, "shares": pos["shares"], "price": price, "stopped": bool(stopped),
-                        **({"day": str(sell["filled_at"])[:10]} if sell.get("filled_at") else {})})
+            since = pos.get("since")
+            q = urllib.parse.urlencode({"status": "closed", "symbols": sym, "side": "sell", "direction": "desc",
+                                        "limit": SELL_ORDERS_LIMIT, **({"after": since} if since else {})})
+            sells = [o for o in self.http("GET", f"{self.base}/v2/orders?{q}") or []
+                     if float(o.get("filled_qty") or 0) > 0 and o.get("filled_avg_price")
+                     and not (since and o.get("filled_at")
+                              and monitor_mod.parse_time(o["filled_at"]) < monitor_mod.parse_time(since))]
+            if not sells:
+                out.append({"symbol": sym, "note": f"Alpaca no longer holds {sym} but shows no filled sell since "
+                                                   "its buy: no exit logged"})
+                continue
+            shares = sum(float(o["filled_qty"]) for o in sells)
+            price = sum(float(o["filled_qty"]) * float(o["filled_avg_price"]) for o in sells) / shares
+            days = sorted(str(o["filled_at"])[:10] for o in sells if o.get("filled_at"))
+            stopped = any(o.get("type") in STOP_TYPES for o in sells) or price <= pos["stop"]
+            out.append({"symbol": sym, "shares": int(shares) if shares == int(shares) else shares,
+                        "price": round(price, 4), "stopped": bool(stopped), **({"day": days[-1]} if days else {})})
         return out
+
+
+def _stamp():
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
 
 def read_log(log=LOG):
@@ -112,24 +134,28 @@ def read_log(log=LOG):
     return [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines() if x.strip()]
 
 
-def open_positions(lines):
-    """{symbol: {"shares", "stop"}}: what the log's fills bought, less what its exit lines closed. A second buy of
-    a stock adds its shares and moves the stop to the newer one."""
+def open_positions(lines, broker=None):
+    """{symbol: {"shares", "stop", "since"?}}: what the log's fills bought, less what its exit lines closed. A second
+    buy of a stock adds its shares and moves the stop to the newer one; "since" is when the last buy was logged.
+    broker: only the lines that broker wrote (a line from before brokers were recorded counts for any)."""
     pos = {}
     for ln in lines:
+        if broker is not None and ln.get("broker", broker) != broker:
+            continue
         if "exit" in ln:
             pos.pop(str(ln["exit"]["symbol"]).upper(), None)
         elif (ln.get("result") or {}).get("stop_order"):
             order = ln["result"]["stop_order"]
             sym = str(order["symbol"]).upper()
-            pos[sym] = {"shares": pos.get(sym, {}).get("shares", 0) + order["shares"], "stop": order["stop"]}
+            pos[sym] = {"shares": pos.get(sym, {}).get("shares", 0) + order["shares"], "stop": order["stop"],
+                        **({"since": ln["logged"]} if ln.get("logged") else {})}
     return pos
 
 
 def run(signals, view, broker, log=LOG, clock=time.time, monitor=None, now=None):
     """Each signal through the monitor, the rules and the broker, one log line each. Returns the signal lines.
-    First, the log's open positions the broker reports closed (a broker with closed()) are logged as exits and
-    recorded in the monitor. A monitor made here also learns every exit already in the log; one passed in keeps
+    First, the log's open positions from this broker that it reports closed (a broker with closed()) are logged
+    as exits and recorded in the monitor; if it fails to answer, a warning line is logged and the signals go on. A monitor made here also learns every exit already in the log; one passed in keeps
     its own history (a replay passes the same monitor to every day's run and records its stop-outs itself)."""
     log.parent.mkdir(parents=True, exist_ok=True)
     earlier = read_log(log)
@@ -138,16 +164,25 @@ def run(signals, view, broker, log=LOG, clock=time.time, monitor=None, now=None)
         for ln in earlier:
             if "exit" in ln:
                 monitor.record_exit(ln["exit"]["day"], ln["exit"]["symbol"], ln["exit"]["stopped"])
-    held = open_positions(earlier)
-    closed = broker.closed(held) if held and hasattr(broker, "closed") else []
-    today = (monitor_mod._ts(now) if now else dt.datetime.now(dt.timezone.utc)).date().isoformat()
+    name = getattr(broker, "name", type(broker).__name__.lower())
+    held = open_positions(earlier, broker=name)
+    warning = None
+    try:
+        closed = broker.closed(held) if held and hasattr(broker, "closed") else []
+    except execution.BrokerError as e:              # a 5xx or a timeout: the exits wait for the next run
+        closed, warning = [], f"could not check open positions with the broker: {e}"
+    today = monitor_mod.utc_day(now).isoformat()
     lines = []
     with log.open("a", encoding="utf-8") as f:
+        if warning:
+            f.write(json.dumps({"logged": _stamp(), "broker": name, "warning": warning}) + "\n")
         for e in closed:
+            if "note" in e:
+                f.write(json.dumps({"logged": _stamp(), "broker": name, "note": e["note"]}) + "\n")
+                continue
             e = {"day": today, **e}
             monitor.record_exit(e["day"], e["symbol"], e["stopped"])
-            logged = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
-            f.write(json.dumps({"logged": logged, "exit": e}) + "\n")
+            f.write(json.dumps({"logged": _stamp(), "broker": name, "exit": e}) + "\n")
         for s in signals:
             t0 = clock()
             stop = monitor.gate(s, now=now)
@@ -163,8 +198,7 @@ def run(signals, view, broker, log=LOG, clock=time.time, monitor=None, now=None)
                 monitor.record(result)
             if result.get("filled"):
                 view = execution.after_fill(view, result["symbol"], result["filled"], result["avg_price"], s.get("sector"))
-            line = {"logged": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "signal": s, "result": result,
-                    "latency_s": round(clock() - t0, 3)}
+            line = {"logged": _stamp(), "broker": name, "signal": s, "result": result, "latency_s": round(clock() - t0, 3)}
             f.write(json.dumps(line) + "\n")
             lines.append(line)
     return lines
@@ -211,8 +245,9 @@ def main(argv):
     else:
         broker = execution.SimBroker({s["symbol"]: {"bid": s["entry"] * 0.999, "ask": s["entry"] * 1.001,
                                                     "depth": int(s.get("avg_volume") or 100_000) // 50} for s in signals})
-    lines = run(signals, view, broker, log=LOG)
-    print(json.dumps(divergence(lines), indent=1))
+    before = len(read_log(LOG))
+    run(signals, view, broker, log=LOG)
+    print(json.dumps(divergence(read_log(LOG)[before:]), indent=1))   # this run's lines: its exits and its signals
     return 0
 
 
