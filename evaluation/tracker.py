@@ -134,7 +134,9 @@ def run():
 
 
 def pct(x, d=2):
-    return "n/a" if x is None or x != x else f"{100 * x:+.{d}f}%"
+    """benchmark's formatter with two decimals. Not functools.partial(bm.pct, d=2): the report passes the decimals
+    positionally (pct(x, 3)), which a partial with d bound as a keyword would reject."""
+    return bm.pct(x, d)
 
 
 def level(x):

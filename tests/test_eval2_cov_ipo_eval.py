@@ -60,10 +60,13 @@ def test_the_sample_leaves_out_misread_offers_and_suspect_prices_and_says_so():
     unpriced = dict(good[2], adsh="np", prices=None)
     no_range = dict(good[2], adsh="nr", range=None)
     rows = good + [suspect, off, unpriced, no_range]
-    assert [r["adsh"] for r in E.usable(rows)] == [r["adsh"] for r in good] + ["nr"]
+    # the main sample drops misreads caught from the filings; suspect opens leave only the robustness sample
+    assert [r["adsh"] for r in E.usable(rows)] == [r["adsh"] for r in good] + ["sus", "nr"]
+    assert [r["adsh"] for r in E.usable(rows, drop_suspect=True)] == [r["adsh"] for r in good] + ["nr"]
     assert E.offer_off_range(off) and not E.offer_off_range(no_range) and not E.offer_off_range(good[0])
     ex = E.excluded(rows)
-    assert [r["adsh"] for r in ex["suspect prices"]] == ["sus"] and [r["adsh"] for r in ex["offer outside the filed range"]] == ["off"]
+    assert [r["adsh"] for r in ex["suspect prices (robustness sample only)"]] == ["sus"]
+    assert [r["adsh"] for r in ex["offer outside the filed range"]] == ["off"]
     assert not E.priced(unpriced) and E.priced(good[0])
 
 
@@ -153,7 +156,7 @@ def small_report(tmp_path, monkeypatch):
     """The report on a small market: three features, test years 2018-19, a short stress run, files in tmp_path."""
     monkeypatch.setattr(E, "ROOT", tmp_path)
     monkeypatch.setattr(E, "HOLDOUT_LOG", tmp_path / "bench_runs" / "ipo_holdout_log.jsonl")
-    monkeypatch.setattr(E.walk_forward, "__defaults__", (range(2018, 2020), SMALL, E.L2, None, None))
+    monkeypatch.setattr(E.walk_forward, "__defaults__", (range(2018, 2020), SMALL, E.L2, None, None, False))
     monkeypatch.setattr(E.fit_year, "__defaults__", (SMALL, E.L2))
     monkeypatch.setattr(E, "FEATURES", SMALL)
     monkeypatch.setattr(E, "L2_GRID", (1.0, 10.0))
@@ -180,7 +183,7 @@ def dataset(holdout_pops=None, unpriced=0):
 def test_the_report_in_development_keeps_the_holdout_sealed(small_report, tmp_path):
     text = small_report(dataset())
     assert "Not scored: IPOs listed from 2024-01-01 stay sealed" in text
-    assert "| suspect prices | 1 |" in text and "| offer outside the filed range | 1 |" in text
+    assert "| suspect prices (robustness sample only) | 1 |" in text and "| offer outside the filed range | 1 |" in text
     assert "| 2018 |" in text and "| 2019 |" in text and "Only the test years where at least 60%" in text
     assert "| SPY bull on the listing day |" in text and "| SPY drawdown on the listing day | 0 | too few to score" in text
     assert "| normal 2018-19 |" in text and "bull 2020-21" not in text            # no test year in that span

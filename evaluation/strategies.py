@@ -472,5 +472,4 @@ def main():
 
 
 if __name__ == "__main__":   # pragma: no cover  (the real run: Yahoo, and caches in the repo)
-    sys.path.insert(0, str(HERE))
     main()

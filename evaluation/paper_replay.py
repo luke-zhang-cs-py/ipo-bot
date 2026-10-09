@@ -29,6 +29,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(HERE))
 
 import benchmark as bm  # noqa: E402
+import common  # noqa: E402
 import execution  # noqa: E402
 import monitor as monitor_mod  # noqa: E402
 import paper  # noqa: E402
@@ -168,11 +169,7 @@ def fills_text(d):
 
 
 def main(argv):
-    for s in (sys.stdout, sys.stderr):
-        try:
-            s.reconfigure(encoding="utf-8")
-        except (AttributeError, ValueError):
-            pass
+    common.utf8_console()
     days = int(argv[argv.index("--days") + 1]) if "--days" in argv else 10
     symbols = bm.UNIVERSES["US large caps"]
     data = {s: bars(s) for s in symbols}

@@ -8,7 +8,8 @@ ipo_setup()     the pre-listing IPO model from evaluation/ipo_eval.py (same feat
                 nothing known, as it would have; 2024 on is the sealed holdout and is left out entirely.
 market_setup()  the benchmark's stock algorithms (evaluation/benchmark.py) on its 30 US large caps: each
                 month-end, next month's return. Closes are stamped at 21:00 UTC on the month-end, predictions at
-                22:00 UTC, the outcome at the next month-end's close.
+                22:00 UTC, the outcome at the next month-end's close. The 30 are today's large caps, a
+                survivor list chosen with hindsight (see market_store): compare the algorithms, not their level.
 
 Every bot here learns only from the views it is handed: features it logged when it predicted, and outcomes
 already published. Nothing is fitted on the full history first.
@@ -188,6 +189,9 @@ def _month_end(ym):
 
 
 def market_store():
+    """The market events: benchmark.py's "US large caps", which are today's 30 large caps. That list is chosen
+    with hindsight (survivorship: the companies that grew into large caps, none that shrank or were delisted), so
+    the market scores flatter every algorithm; read them as relative to each other, not as an absolute edge."""
     import benchmark as bm
     symbols = bm.UNIVERSES["US large caps"]
     months, px = bm.panel(symbols)

@@ -11,7 +11,10 @@ a logistic regression on what was public before each listing, refitted every yea
 
 The checks, in the order of the brief:
   1. walk-forward by year, with and without re-choosing the settings each year; a sealed holdout scored once;
-     regimes by calendar (bull 2020-21, bear and high rates 2022-23) and by SPY on each listing day
+     regimes by calendar (bull 2020-21, bear and high rates 2022-23) and by SPY on each listing day; the headline
+     with and without the 0.5-4x open exclusion; against a range-revision-only logit (paired bootstrap,
+     Diebold-Mariano); raw against Platt-calibrated probabilities (fitted on training years only); and who is
+     missing (the IPOs Yahoo has no prices for, by year, and their pre-listing facts beside the priced ones)
   2. a leakage audit (dates, a perturbation test, and a canary feature it must catch); feature sensitivity
      (permutation and drop-one, beside a pure-noise feature); class imbalance (PR-AUC, F1, not accuracy)
   3. slippage of 0.5-2% on buying at the open, and the friction that wipes out the edge; the winner's curse
@@ -33,6 +36,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parents[0]
 sys.path.insert(0, str(HERE))
 
+import benchmark as bm  # noqa: E402  (the one percentage formatter, and the Newey-West t)
 import ipo_data  # noqa: E402
 
 POP = 0.20                      # a "pop": first-day close 20% or more above the offer
@@ -50,6 +54,8 @@ COVERED = 0.6                   # a year counts as well covered when this share 
 BOOTSTRAP = 1000                # resamples for each confidence interval
 CURSE_K = (2, 5, 10)            # how steeply a retail allocation shrinks as a deal's demand grows
 OFFER_BAND = (0.5, 2.0)         # an offer below half the filed range's low or above twice its high is a misread
+BASELINE = ["revision"]          # the range revision alone: what the full model has to beat to earn its other inputs
+DM_LAG = 5                      # Newey-West lag for the Diebold-Mariano test: IPOs a few listings apart share a market
 FEATURES = ["revision", "above_range", "below_range", "no_range", "log_proceeds", "log_price", "bank_share",
             "tech", "biotech", "finance", "foreign", "spy_20d", "heat_30d", "deals_30d"]
 
@@ -65,25 +71,37 @@ def priced(r):
     return bool(r.get("offer_price") and r.get("prices") and r["prices"].get("open") and r["prices"].get("close"))
 
 
+def prelisting_range(r):
+    """The IPO's price range if it was public before the listing day, else None: a range from a filing dated on
+    or after the listing day was not (the one rule, used by features() and offer_off_range())."""
+    rng, listed = r.get("range"), (r.get("prices") or {}).get("listing_date")
+    if rng and listed and r.get("range_date") and r["range_date"] >= listed:
+        return None
+    return rng
+
+
 def offer_off_range(r):
     """True when the offer is far outside the price range filed before it (OFFER_BAND): a parser's misread, caught
     from pre-listing facts alone, unlike ipo_data's suspect flag, which reads the first day's open."""
-    rng, offer = r.get("range"), r.get("offer_price")
+    rng, offer = prelisting_range(r), r.get("offer_price")
     return bool(rng and offer and not OFFER_BAND[0] * rng[0] <= offer <= OFFER_BAND[1] * rng[1])
 
 
 def excluded(rows):
-    """The priced IPOs usable() leaves out, by reason. Suspect prices (an open outside 0.5-4x the offer) are judged
-    on the listing day itself, so the report states how many there are and how they traded: the selection is
+    """The priced IPOs left out, by reason. An offer outside the filed range is caught from the filings alone and
+    leaves every sample; suspect prices (an open outside 0.5-4x the offer) are judged on the listing day itself,
+    so they leave only the robustness sample (usable(drop_suspect=True)), and are counted so the selection is
     visible rather than silent."""
     p = [r for r in rows if priced(r)]
-    return {"suspect prices": [r for r in p if r["prices"].get("suspect")],
-            "offer outside the filed range": [r for r in p if not r["prices"].get("suspect") and offer_off_range(r)]}
+    return {"offer outside the filed range": [r for r in p if offer_off_range(r)],
+            "suspect prices (robustness sample only)": [r for r in p if r["prices"].get("suspect") and not offer_off_range(r)]}
 
 
-def usable(rows):
-    """IPOs with an offer price and trustworthy first-day prices, whose offer agrees with the filed range."""
-    return [r for r in rows if priced(r) and not r["prices"].get("suspect") and not offer_off_range(r)]
+def usable(rows, drop_suspect=False):
+    """IPOs with an offer price and first-day prices whose offer agrees with the range filed before listing: the
+    misread filter uses pre-listing facts only. drop_suspect=True also leaves out an open outside 0.5-4x the
+    offer, which reads the listing day (a check of how much that selection moves the results)."""
+    return [r for r in rows if priced(r) and not offer_off_range(r) and not (drop_suspect and r["prices"].get("suspect"))]
 
 
 def split(rows, final=False):
@@ -173,18 +191,17 @@ def bank_shares(train):
 
 def features(r, market, banks):
     """The model's inputs for one IPO, from its prospectus, the market before it, and the training league table."""
-    offer, rng = r["offer_price"], r.get("range")
-    listed = (r.get("prices") or {}).get("listing_date")
-    if rng and listed and r.get("range_date") and r["range_date"] >= listed:
-        rng = None                                 # a filing from the listing day or later was not public before it
+    offer, rng = r["offer_price"], prelisting_range(r)
     mid = (rng[0] + rng[1]) / 2 if rng else None
+    # a single assumed price (a point range) is a reference, not a range: an offer can't be "above" it
+    ranged = bool(rng) and r.get("range_source") != "assumed" and rng[0] < rng[1]
     proceeds = offer * r["shares"] if r.get("shares") else None
     g = sic_group(r.get("sic"))
     m = market.get(r["adsh"], {"spy_20d": 0.0, "heat_30d": 0.0, "deals_30d": 0.0})
     return {
         "revision": (offer / mid - 1) if mid else 0.0,
-        "above_range": float(bool(rng) and offer > rng[1] + 1e-9),
-        "below_range": float(bool(rng) and offer < rng[0] - 1e-9),
+        "above_range": float(ranged and offer > rng[1] + 1e-9),
+        "below_range": float(ranged and offer < rng[0] - 1e-9),
         "no_range": float(not rng),
         "log_proceeds": math.log(proceeds) if proceeds else math.log(50e6),
         "log_price": math.log(offer),
@@ -355,6 +372,40 @@ def bootstrap_ci(scores, ys, metric=average_precision, n=BOOTSTRAP, seed=13, lev
     return lo, hi
 
 
+def paired_bootstrap(a, b, ys, metric=average_precision, n=BOOTSTRAP, seed=13, level=0.95):
+    """metric(a) - metric(b) on the same IPOs, resampled together: (difference, 95% interval, the share of
+    resamples where a does not beat b, a one-sided bootstrap p)."""
+    rng = random.Random(seed)
+    k = len(ys)
+    diffs = []
+    for _ in range(n):
+        idx = [rng.randrange(k) for _ in range(k)]
+        sy = [ys[i] for i in idx]
+        if 0 < sum(sy) < k:
+            diffs.append(metric([a[i] for i in idx], sy) - metric([b[i] for i in idx], sy))
+    if not diffs:
+        return metric(a, ys) - metric(b, ys), (float("nan"), float("nan")), float("nan")
+    diffs.sort()
+    lo, hi = diffs[int((1 - level) / 2 * (len(diffs) - 1))], diffs[int((1 + level) / 2 * (len(diffs) - 1))]
+    return metric(a, ys) - metric(b, ys), (lo, hi), sum(d <= 0 for d in diffs) / len(diffs)
+
+
+def diebold_mariano(a, b, ys, lag=DM_LAG):
+    """Diebold-Mariano on squared errors (Brier loss), IPOs in listing order: (mean loss of a minus b, t, two-sided
+    p from the normal). A negative difference means a's probabilities are closer to what happened."""
+    d = [(x - y) ** 2 - (z - y) ** 2 for x, z, y in zip(a, b, ys)]
+    t = bm.newey_west_t(d, lag)
+    return statistics.fmean(d), t, (math.erfc(abs(t) / math.sqrt(2)) if math.isfinite(t) else float("nan"))
+
+
+def reliability(scores, ys, bins=10):
+    """Predictions sorted and cut into `bins` equal groups: [(n, mean predicted, share that popped)], lowest first."""
+    pairs = sorted(zip(scores, ys))
+    k = len(pairs)
+    groups = [pairs[i * k // bins:(i + 1) * k // bins] for i in range(bins)]
+    return [(len(g), statistics.fmean(s for s, _ in g), statistics.fmean(y for _, y in g)) for g in groups if g]
+
+
 def p_text(p, n=1000):
     """A permutation p-value stated exactly: the smallest possible one says so instead of rounding to 0.001."""
     return f"p < {1 / n:.3f} (none of {n:,} shuffled runs did as well)" if p <= 1 / (n + 1) + 1e-12 else f"p = {p:.3f}"
@@ -375,9 +426,11 @@ def fit_year(train, market, names=FEATURES, l2=L2):
     return model, banks, best_threshold(train_scores, ys), sum(ys) / len(ys)
 
 
-def walk_forward(rows, market, years=TEST_YEARS, names=FEATURES, l2=L2, window=None, settings=None):
+def walk_forward(rows, market, years=TEST_YEARS, names=FEATURES, l2=L2, window=None, settings=None, calibrate=False):
     """Each test year predicted by a model fitted on earlier years only (all of them, or the last `window`):
-    [{year, rows, scores, ys, ...}]. settings(year, train) -> (l2, window) re-chooses them each year."""
+    [{year, rows, scores, ys, ...}]. settings(year, train) -> (l2, window) re-chooses them each year.
+    calibrate=True adds "calibrated" scores: the year's scores through a Platt scaling fitted on its training
+    years alone (platt()), or the raw scores when those years can't support one."""
     folds = []
     for y in years:
         cut = f"{y}-01-01"
@@ -392,7 +445,30 @@ def walk_forward(rows, market, years=TEST_YEARS, names=FEATURES, l2=L2, window=N
         folds.append({"year": y, "rows": test, "feats": feats, "model": model, "threshold": t, "base_rate": base,
                       "scores": [model.prob(f) for f in feats], "ys": [int(popped(first_day(r))) for r in test],
                       "train_last": max(r["prices"]["listing_date"] for r in train), "l2": l2_y, "window": window_y})
+        if calibrate:
+            cal = platt(train, market, names, l2_y)
+            folds[-1]["calibrated"] = [cal.prob({"z": _logit(s)}) for s in folds[-1]["scores"]] if cal else list(folds[-1]["scores"])
+            folds[-1]["calibrator"] = cal
     return folds
+
+
+def _logit(p):
+    p = min(1 - 1e-6, max(1e-6, p))
+    return math.log(p / (1 - p))
+
+
+def platt(train, market, names=FEATURES, l2=L2):
+    """A Platt scaling fitted on training years only, by an inner time split: the model refitted without the
+    last training year predicts that year, and a one-input logistic regression maps those out-of-sample scores
+    (as log-odds) to pop odds. None when the inner years are under 50 IPOs or the last year is all one class."""
+    last = max(r["prices"]["listing_date"][:4] for r in train)
+    inner = [r for r in train if r["prices"]["listing_date"][:4] < last]
+    held = [r for r in train if r["prices"]["listing_date"][:4] == last]
+    ys = [int(popped(first_day(r))) for r in held]
+    if len(inner) < 50 or not 0 < sum(ys) < len(ys):
+        return None
+    model, banks, _, _ = fit_year(inner, market, names, l2)
+    return Logit(["z"], L2).fit([{"z": _logit(model.prob(features(r, market, banks)))} for r in held], ys)
 
 
 def choose_settings(market, inner_years=2):
@@ -577,9 +653,9 @@ def score_live(event, model, banks, market_now):
         offer = ipo_data.offer_price(text)
         if not offer:
             return {"status": "unknown", "why": "no offer price in the prospectus"}
-        rng = ipo_data.price_range(ipo_data.text_of(as_text(event.get("registration"))))
+        reading = ipo_data.range_reading(ipo_data.text_of(as_text(event.get("registration"))))
         row = {"adsh": "live", "offer_price": offer, "shares": ipo_data.shares_offered(text), "lead_bank": ipo_data.lead_bank(text),
-               "range": list(rng) if rng else None, "sic": event.get("sic") if isinstance(event.get("sic"), str) else None,
+               "range": list(reading[0]) if reading else None, "range_source": reading[1] if reading else None, "sic": event.get("sic") if isinstance(event.get("sic"), str) else None,
                "foreign": event.get("foreign") is True}
         p = model.prob(features(row, {"live": market_now}, banks))
         out = {"status": "ok", "p_pop": p, "offer": offer}
@@ -669,33 +745,69 @@ def spy_closes():
     return closes
 
 
-def pct(x, d=1):
-    return "n/a" if x is None or (isinstance(x, float) and math.isnan(x)) else f"{100 * x:+.{d}f}%"
+pct = bm.pct                    # the one formatter: "n/a" for a missing or non-finite value, no "-0.0%"
 
 
 def num(x, d=3):
     return "n/a" if x is None or (isinstance(x, float) and math.isnan(x)) else f"{x:.{d}f}"
 
 
-def coverage_lines(raw, rows):
-    """Coverage by year (survivorship), and what usable() left out of the priced IPOs, with how they traded."""
-    lines = ["## Coverage (survivorship)", "", "| Year | IPOs | priced | share |", "|---|---|---|---|"]
+def coverage_lines(raw, rows, strict):
+    """Coverage by year (survivorship): how many IPOs Yahoo has no prices for, and how many each sample keeps; then
+    what the samples leave out of the priced IPOs, with how they traded."""
+    lines = ["## Coverage (survivorship)", "",
+             "| Year | IPOs | no Yahoo prices | missing share | usable | usable, suspect opens also out |", "|---|---|---|---|---|---|"]
     for y in sorted({r["prospectus_date"][:4] for r in raw}):
         n = sum(r["prospectus_date"][:4] == y for r in raw)
+        miss = sum(r["prospectus_date"][:4] == y and not r.get("prices") for r in raw)
         k = sum(r["prospectus_date"][:4] == y for r in rows)
-        lines.append(f"| {y} | {n} | {k} | {100 * k / n:.0f}% |")
-    lines += ["", "An IPO with no prices was delisted (or its ticker changed): the failures leave the sample, which flatters "
-              "later returns more than first days.", ""]
+        k2 = sum(r["prospectus_date"][:4] == y for r in strict)
+        lines.append(f"| {y} | {n} | {miss} | {100 * miss / n:.0f}% | {k} | {k2} |")
+    miss = sum(not r.get("prices") for r in raw)
+    lines += ["", f"{share(miss, len(raw))} of the IPOs have no Yahoo prices: mostly delisted (or renamed) since. The failures "
+              "leave the sample, which flatters later returns more than first days; the next table shows how they "
+              "differed before they listed.", ""]
     lines += ["## Excluded from the sample", "", "| Reason | IPOs | median first day | mean first day |", "|---|---|---|---|"]
     for reason, rs in excluded(raw).items():
         fd = [first_day(r) for r in rs]
         lines.append(f"| {reason} | {len(rs)} | {pct(statistics.median(fd) if fd else None)} | "
                      f"{pct(statistics.fmean(fd) if fd else None)} |")
-    lines += ["", "Suspect prices are an open below half the offer or above four times it, so they are judged on the listing "
-              "day itself; they are left out because they are almost always a rescaled history or a misread offer, and "
-              f"counted here so the selection is visible. An offer outside {OFFER_BAND[0]:g}x the range's low to "
-              f"{OFFER_BAND[1]:g}x its high is caught from the filings alone.", ""]
+    lines += ["", f"An offer outside {OFFER_BAND[0]:g}x the pre-listing range's low to {OFFER_BAND[1]:g}x its high is a misread "
+              "caught from the filings alone, and leaves every sample. Suspect prices (an open below half the offer or "
+              "above four times it: usually a rescaled history) are judged on the listing day itself, so they stay in "
+              "the main sample and leave only the robustness check below.", ""]
     return lines
+
+
+def sample_bias_lines(raw):
+    """Pre-listing facts of the IPOs Yahoo has prices for against those it has none for: whether the missing
+    ones were different deals before anyone knew how they would trade."""
+    banks = bank_shares(raw)
+    groups = {"with prices": [r for r in raw if r.get("prices") and r.get("offer_price")],
+              "no prices": [r for r in raw if not r.get("prices") and r.get("offer_price")]}
+    feats = {g: [features(r, {}, banks) for r in rs] for g, rs in groups.items()}
+
+    def mean(g, k):
+        return statistics.fmean(f[k] for f in feats[g]) if feats[g] else None
+
+    def med(g, fn):
+        xs = [x for x in (fn(r) for r in groups[g]) if x]
+        return statistics.median(xs) if xs else None
+    rows_ = [("IPOs with an offer price", lambda g: str(len(groups[g]))),
+             ("median offer price", lambda g: num(med(g, lambda r: r["offer_price"]), 2)),
+             ("median proceeds ($m)", lambda g: num(med(g, lambda r: r["offer_price"] * r["shares"] / 1e6 if r.get("shares") else None), 1)),
+             ("mean revision against the range midpoint", lambda g: pct(mean(g, "revision"))),
+             ("priced above the range", lambda g: pct(mean(g, "above_range"))),
+             ("priced below the range", lambda g: pct(mean(g, "below_range"))),
+             ("no range filed", lambda g: pct(mean(g, "no_range"))),
+             ("lead bank's share of all deals", lambda g: pct(mean(g, "bank_share"))),
+             ("tech", lambda g: pct(mean(g, "tech"))), ("biotech", lambda g: pct(mean(g, "biotech"))),
+             ("foreign filer", lambda g: pct(mean(g, "foreign")))]
+    lines = ["## Who is missing: pre-listing facts, priced against unpriced", "",
+             "| Before the listing | " + " | ".join(groups) + " |", "|---|" + "---|" * len(groups)]
+    lines += [f"| {name} | " + " | ".join(fn(g) for g in groups) + " |" for name, fn in rows_]
+    return lines + ["", "If the unpriced deals look colder (smaller, cut below their range, thinner banks), the priced sample "
+                    "is tilted toward hot deals and every pop rate here is too high.", ""]
 
 
 def walk_forward_lines(folds, raw, rows):
@@ -804,6 +916,62 @@ def holdout_lines(dev, hold, market, final, again):
     return lines, True
 
 
+def exclusion_lines(folds, strict_folds):
+    """The headline on the main sample (misreads caught from the filings) and with suspect opens also left out."""
+    lines = ["## 1. With and without the open-price exclusion", "",
+             "| Sample | test IPOs | base rate | PR-AUC (95% CI) | ROC-AUC | Brier |", "|---|---|---|---|---|---|"]
+    for name, fs in (("main: misread offers out (pre-listing facts only)", folds),
+                     ("also without opens outside 0.5-4x the offer (reads the listing day)", strict_folds)):
+        s, y, _ = pooled(fs)
+        if not y or not sum(y):
+            lines.append(f"| {name} | {len(y)} | too few to score | | | |")
+            continue
+        lo, hi = bootstrap_ci(s, y)
+        lines.append(f"| {name} | {len(y)} | {share(sum(y), len(y))} | {num(average_precision(s, y))} ({num(lo)} to {num(hi)}) | "
+                     f"{num(roc_auc(s, y))} | {num(brier(s, y))} |")
+    return lines + ["", "The second row selects on the listing day's open, so it is a check, not the result.", ""]
+
+
+def calibration_lines(folds):
+    """Raw against Platt-calibrated probabilities over the test years (each year's calibration fitted on its own
+    training years by an inner time split; no test IPO is used), by decile of predicted probability."""
+    s, y, fs = pooled(folds)
+    c = [x for f in fs for x in f["calibrated"]]
+    b0 = brier([statistics.fmean(f["base_rate"] for f in fs)] * len(y), y)
+    fitted = sum(f["calibrator"] is not None for f in fs)
+    lines = ["## 1. Calibration", "", "Platt scaling per test year, fitted on its training years only: the model refitted without "
+             f"the last training year predicts it, and those out-of-sample scores set the scaling ({fitted} of {len(fs)} years "
+             "had enough to fit one; the rest keep the raw scores).", "",
+             f"Brier raw {num(brier(s, y))} (skill {num(1 - brier(s, y) / b0)}), calibrated {num(brier(c, y))} "
+             f"(skill {num(1 - brier(c, y) / b0)}); PR-AUC raw {num(average_precision(s, y))}, calibrated "
+             f"{num(average_precision(c, y))} (the scaling is monotone within a year, so only pooling across years moves the ranking).", "",
+             "| Decile | raw: predicted | raw: popped | calibrated: predicted | calibrated: popped |", "|---|---|---|---|---|"]
+    for k, (r, cc) in enumerate(zip(reliability(s, y), reliability(c, y)), 1):
+        lines.append(f"| {k} | {num(r[1])} | {num(r[2])} | {num(cc[1])} | {num(cc[2])} |")
+    return lines + [""]
+
+
+def baseline_lines(folds, base_folds):
+    """The full model against a logit on the range revision alone, on the same test IPOs: does anything beyond
+    the revision add? PR-AUC with a paired bootstrap, Brier with Diebold-Mariano (IPOs in listing order)."""
+    days = [r["prices"]["listing_date"] for f in folds for r in f["rows"]]
+    order = sorted(range(len(days)), key=lambda i: days[i])
+    s, y, _ = pooled(folds)
+    b = pooled(base_folds)[0]
+    s, b, y = [s[i] for i in order], [b[i] for i in order], [y[i] for i in order]
+    lines = ["## 1. Against the range revision alone", "", f"A logistic regression on {', '.join(BASELINE)} only, refitted "
+             "each year the same way, on the same test IPOs: the honest bar for the other inputs.", "",
+             "| Model | PR-AUC (95% CI) | ROC-AUC | Brier |", "|---|---|---|---|"]
+    for name, sc in (("full model", s), ("range revision only", b)):
+        lo, hi = bootstrap_ci(sc, y)
+        lines.append(f"| {name} | {num(average_precision(sc, y))} ({num(lo)} to {num(hi)}) | {num(roc_auc(sc, y))} | {num(brier(sc, y))} |")
+    d, (lo, hi), p1 = paired_bootstrap(s, b, y)
+    dl, t, p2 = diebold_mariano(s, b, y)
+    return lines + ["", f"PR-AUC, full minus revision only: {d:+.3f} (paired bootstrap 95% CI {num(lo)} to {num(hi)}; the full model "
+                    f"fails to beat it in {num(100 * p1, 1)}% of resamples). Brier, full minus revision only: {dl:+.4f} "
+                    f"(Diebold-Mariano t {num(t, 2)}, p {num(p2, 3)}; negative favours the full model).", ""]
+
+
 def leakage_lines(dev, spy20):
     audit = leakage_audit(dev, lambda rs: _all_features(rs, spy20))
     return ["## 2. Leakage audit", "",
@@ -866,18 +1034,22 @@ def stress_lines(dev, market):
 
 def report(final=False, again=False):
     raw = ipo_data.load()
-    rows = usable(raw)
+    rows, strict = usable(raw), usable(raw, drop_suspect=True)
     dev, hold = split(rows, final)
     spy = spy_closes()
     spy20 = spy_returns(spy)
     market = market_features(rows if final else dev, spy20)
     lines = [f"# IPO evaluation, {dt.date.today().isoformat()}", "",
-             f"{len(raw)} IPOs with a final prospectus since {ipo_data.FIRST_YEAR}; {len(rows)} with an offer price and trustworthy first-day "
-             f"prices; a pop is a first-day close {100 * POP:.0f}% or more above the offer.", ""]
-    lines += coverage_lines(raw, rows)
-    folds = walk_forward(dev, market)
+             f"{len(raw)} IPOs with a final prospectus since {ipo_data.FIRST_YEAR}; {len(rows)} with an offer price and first-day "
+             f"prices whose offer agrees with the range filed before listing; a pop is a first-day close {100 * POP:.0f}% or "
+             "more above the offer.", ""]
+    lines += coverage_lines(raw, rows, strict) + sample_bias_lines(raw)
+    folds = walk_forward(dev, market, calibrate=True)
+    strict_dev = split(strict)[0]
+    strict_folds = walk_forward(strict_dev, market_features(strict_dev, spy20))
     wf, allc, ci = walk_forward_lines(folds, raw, rows)
-    lines += wf + reoptimised_lines(dev, market, folds, allc, ci) + regime_lines(folds, spy)
+    lines += wf + exclusion_lines(folds, strict_folds) + baseline_lines(folds, walk_forward(dev, market, names=BASELINE))
+    lines += calibration_lines(folds) + reoptimised_lines(dev, market, folds, allc, ci) + regime_lines(folds, spy)
     hl, final = holdout_lines(dev, hold, market, final, again)
     lines += hl + leakage_lines(dev, spy20) + sensitivity_lines(dev, market, folds) + imbalance_lines(allc)
     lines += trading_lines(folds) + stress_lines(dev, market)

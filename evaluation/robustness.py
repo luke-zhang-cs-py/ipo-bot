@@ -142,7 +142,8 @@ def report():
                 "|---|---:|" + "---:|" * len(COSTS_BPS)]
         for a in algos + ["Random (no skill)"]:
             nets = [top_third_net(keep, a, months, b) for b in COSTS_BPS]
-            out.append(f"| {a} | {100 * nets[0][1]:.0f}% | " +
+            turn = nets[0][1]                       # nan with a single month: no rebalance to measure
+            out.append(f"| {a} | {'n/a' if turn != turn else f'{100 * turn:.0f}%'} | " +
                        " | ".join(f"{pct(r)} ({pct(r - ew)})" for r, _ in nets) + " |")
         out.append("")
     out += ["Each cell: annual return after costs (in brackets: against holding everything). Basis points are per "

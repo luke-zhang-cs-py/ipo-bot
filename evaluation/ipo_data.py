@@ -4,10 +4,14 @@ it listed, and how it traded after.
     python evaluation/ipo_data.py                 build or extend bench_data/ipo/ipos.jsonl (resumes; about an hour)
     python evaluation/ipo_data.py --summary       counts by year, and how many have prices
     python evaluation/ipo_data.py --refresh       re-read every IPO's cover and prices (after a parser fix)
+    python evaluation/ipo_data.py --ranges        re-read every IPO's price range from its registrations (after a range
+                                                  parser fix); the offer is re-read only where it no longer fits the range
     python evaluation/ipo_data.py --initial-ranges   add each IPO's first filed price range
 
 Before the listing (features): the offer price, shares and lead bookrunner from the final prospectus (424B4),
-the price range from the last amended registration (S-1/A or F-1/A) filed before it, the SIC code, and
+the price range from the last amended registration (S-1/A or F-1/A) filed before it (with range_source: "stated",
+"midpoint" when rebuilt around the midpoint the filing assumes because its cover was stale, or "assumed" for a
+single assumed price stored as a point range), the SIC code, and
 whether it is a foreign filer. After (outcomes): the first day's open and close and the closes 21 and 252
 trading days on, from Yahoo's daily chart with later splits undone so they compare with the offer price.
 
@@ -45,7 +49,8 @@ FIRST_YEAR = 2015
 WORKERS = 6                   # filings read at once
 
 # The prospectus parsers live in the bot (one copy, read the same way by both); re-exported for this module's callers.
-from bot.prospectus import lead_bank, listing_symbol, offer_price, price_range, shares_offered, text_of  # noqa: E402,F401
+from bot.prospectus import (lead_bank, listing_symbol, offer_price, price_range, range_reading,  # noqa: E402,F401
+                             shares_offered, text_of)
 
 
 def first_days(chart, listing_hint, offer):
@@ -144,6 +149,7 @@ def prospectus_hits(sec, year):
 
 
 REPORTS = ("10-K", "10-Q", "20-F", "40-F")
+REGISTRATIONS = ("S-1/A", "F-1/A", "S-1", "F-1")
 
 
 def filings_of(sec, cik, before=None):
@@ -201,20 +207,27 @@ def build_row(sec, hit):
     row = {"cik": hit["cik"], "company": hit["name"], "ticker": hit["ticker"], "sic": sic or hit["sic"],
            "prospectus_date": hit["file_date"], "file": hit["file"], "shares": shares_offered(text), "lead_bank": lead_bank(text),
            "foreign": any(f.startswith("F-1") for f, d, _, _ in filings if d <= hit["file_date"]),
-           "range": None, "range_date": None, "sources": {"prospectus": hit["file_date"]}}
-    amended = [r for r in filings if r[0] in ("S-1/A", "F-1/A", "S-1", "F-1") and r[1] <= hit["file_date"]]
-    for form, date, acc, doc in reversed(amended[-3:]):      # the latest registration that states a range
-        rng = price_range(text_of(sec.head(f"{base}/{acc.replace('-', '')}/{doc}")))
-        if rng:
-            row["range"], row["range_date"] = list(rng), date
-            row["sources"]["range"] = date
-            break
+           "range": None, "range_date": None, "range_source": None, "sources": {"prospectus": hit["file_date"]}}
+    row.update(latest_range(sec, base, filings, hit["file_date"]))
+    if row["range_date"]:
+        row["sources"]["range"] = row["range_date"]
     offer = offer_price(text, row["range"])
     row["offer_price"] = offer
     row["listing_symbol"] = listing_symbol(text)
     row["prices"] = None
     row.update(price_history((row["listing_symbol"], hit["ticker"]), hit["file_date"], offer))
     return row
+
+
+def latest_range(sec, base, filings, before):
+    """{range, range_date, range_source} from the latest of the last three registrations filed by `before` that
+    states a range (bot.prospectus.range_reading); all None when none does."""
+    amended = [r for r in filings if r[0] in REGISTRATIONS and r[1] <= before]
+    for form, date, acc, doc in reversed(amended[-3:]):
+        reading = range_reading(text_of(sec.head(f"{base}/{acc.replace('-', '')}/{doc}")))
+        if reading:
+            return {"range": list(reading[0]), "range_date": date, "range_source": reading[1]}
+    return {"range": None, "range_date": None, "range_source": None}
 
 
 def price_history(symbols, listing_hint, offer):
@@ -296,6 +309,42 @@ def refresh():
                 print(f"  {n}/{len(rows)}", flush=True)
 
 
+def refresh_ranges():
+    """Re-read every IPO row's price range from its registrations (after a fix to the range parser), without
+    fetching prices again. The offer was picked with the old range as a guard against per-share fees, so it is
+    re-read from the final prospectus only where it falls outside half the new range's low to twice its high;
+    the suspect flag is recomputed from the stored open if the offer changes."""
+    sec = Sec()
+    rows = load(dedupe=False)
+    print(f"re-reading the ranges of {len(rows)} IPO rows", flush=True)
+
+    def one(r):
+        try:
+            filings, _ = filings_of(sec, r["cik"], before=r["prospectus_date"])
+            if not any(f[0] in REGISTRATIONS and f[1] <= r["prospectus_date"] for f in filings):
+                filings, _ = filings_of(sec, r["cik"])   # a busy filer's recent page can start after its registrations
+            base = f"https://www.sec.gov/Archives/edgar/data/{int(r['cik'])}"
+            new = {**r, **latest_range(sec, base, filings, r["prospectus_date"])}
+            new["sources"] = {k: v for k, v in {**(r.get("sources") or {}), "range": new["range_date"]}.items() if v}
+            rng, offer = new["range"], r.get("offer_price")
+            if rng and offer and not 0.5 * rng[0] <= offer <= 2 * rng[1] and r.get("file"):
+                text = text_of(sec.head(f"{base}/{r['adsh'].replace('-', '')}/{r['file']}"))
+                new["offer_price"] = offer_price(text, rng)
+                p = new.get("prices")
+                if p and p.get("open"):
+                    new["prices"] = p = {**p}
+                    p["suspect"] = bool(not new["offer_price"] or not 0.5 <= p["open"] / new["offer_price"] <= 4)
+            return new
+        except Exception as e:
+            return {**r, "refresh_error": str(e)}
+    with OUT.open("a", encoding="utf-8") as f, concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        for n, new in enumerate(pool.map(one, rows), 1):
+            f.write(json.dumps(new) + "\n")
+            f.flush()
+            if n % 100 == 0:
+                print(f"  {n}/{len(rows)}", flush=True)
+
+
 INITIAL = ROOT / "bench_data" / "ipo" / "initial_ranges.json"
 
 
@@ -366,7 +415,7 @@ def summary():
 
 
 def main(argv):
-    (summary() if "--summary" in argv else refresh() if "--refresh" in argv
+    (summary() if "--summary" in argv else refresh() if "--refresh" in argv else refresh_ranges() if "--ranges" in argv
      else add_initial_ranges() if "--initial-ranges" in argv else build())
 
 

@@ -338,8 +338,9 @@ def report(refresh=False, ledger=False):
         out += [f"## {uni} ({len(symbols)} names)", ""]
         for h in HORIZONS:
             prep = prepare(months, px, symbols, h)
-            per = {a: walk(prep, a) for a in prep["pos"][prep["idx"][0]]}
-            if not per[RANDOM]:                       # too short a history to fit even the first forecast
+            # no month-ends at all (LOOKBACK + h months or fewer), or too few to fit even the first forecast
+            per = {a: walk(prep, a) for a in prep["pos"][prep["idx"][0]]} if prep["idx"] else {}
+            if not per.get(RANDOM):
                 out += [f"### {h}-month forecasts: too few months ({MIN_TRAIN_DATES} matured month-ends come first)", ""]
                 continue
             scores = {a: score(r) for a, r in per.items()}
