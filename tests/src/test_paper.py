@@ -152,7 +152,7 @@ def test_alpaca_reports_a_logged_position_it_no_longer_holds_as_an_exit_only_wit
     assert out["UNDER"]["stopped"] is True and out["OVER"]["stopped"] is False
     # gone with no filled sell to show for it (sold by hand, or a sim position): a note, never a priceless exit
     assert out["GONE"] == {"symbol": "GONE", "note": "Alpaca no longer holds GONE but shows no filled sell since its buy: "
-                                                     "no exit logged"}
+                                                     "closed, unpriced (no exit for the monitor)"}
     assert all("side=sell" in url for _, url, _ in fake.calls if "/v2/orders?" in url)
     assert paper.AlpacaPaper("k", "s", http=FakeAlpaca(), wait_s=0.0).closed({"X": {"shares": 1, "stop": 1.0}})[0]["symbol"] == "X"
 

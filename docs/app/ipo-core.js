@@ -163,23 +163,102 @@
     if (bad) throw new Error("the KEY NUMBERS block is not valid JSON (" + bad.message + ")");
     throw new Error('no ```json block with a "key_numbers" object');
   }
-  // JSON.parse drops Python's int/float split ("1.0" and "1" both become 1), so note which numbers were written as floats
-  // (by their source text, where the engine gives it) for pyStr to print the way Python's str() does: 1.0, not 1
-  const FLOATS = new WeakMap();
-  function parseJson(raw) {
-    return JSON.parse(raw, function (key, value, ctx) {
-      if (typeof value === "number" && ctx && typeof ctx.source === "string" && /[.eE]/.test(ctx.source)) {
-        if (!FLOATS.has(this)) FLOATS.set(this, new Set());
-        FLOATS.get(this).add(key);
+  // Python's json.loads, not JSON.parse, which differs where a model's block can tell: it reorders integer-like keys
+  // ("1" before "b"), drops the int/float split (1.0 and 1 both become 1), rounds integers past 2^53, rejects NaN and
+  // Infinity, and gives "__proto__" special meaning. The engine's source-text reviver would fix only the floats, and
+  // only in recent browsers, so this reads the text itself, the same way in every browser: objects have no prototype,
+  // keep their key order (ORDER), and each number remembers how it was written (TAGS: "f" for a float, else the
+  // integer's digits), for pyStr to print the way Python's str() does.
+  const ORDER = new WeakMap(), TAGS = new WeakMap();
+  const MAX_INT_DIGITS = 4300;                  // sys.get_int_max_str_digits(): a longer integer is a ValueError
+  const ESCAPES = { '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" };
+  const LITERALS = [["null", null], ["true", true], ["false", false]];
+  const NOT_FINITE = ["NaN", "Infinity", "-Infinity"];     // verify._loads refuses them: they would crash the maths
+  function parseJson(text) {
+    let i = 0;
+    const fail = (msg) => { throw new SyntaxError(msg + " at position " + i); };
+    const ws = () => { while (i < text.length && " \t\n\r".includes(text[i])) i++; };
+    const tag = (holder, key, t) => { if (!TAGS.has(holder)) TAGS.set(holder, new Map()); TAGS.get(holder).set(String(key), t); };
+    const NUM = /-?(?:0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?/y;
+    function string() {
+      let out = "";
+      i++;
+      for (;;) {
+        if (i >= text.length) fail("Unterminated string");
+        const ch = text[i++];
+        if (ch === '"') return out;
+        if (ch < " ") fail("Invalid control character");
+        if (ch !== "\\") { out += ch; continue; }
+        const e = text[i++];
+        if (e === "u") {
+          const hex = text.slice(i, i + 4);
+          if (!/^[0-9a-fA-F]{4}$/.test(hex)) fail("Invalid \\uXXXX escape");
+          out += String.fromCharCode(parseInt(hex, 16));
+          i += 4;
+        } else if (e !== undefined && Object.hasOwn(ESCAPES, e)) out += ESCAPES[e];
+        else fail("Invalid \\escape");
       }
-      return value;
-    });
+    }
+    function value(holder, key) {               // the value at text[i]; a number is tagged on its holder
+      ws();
+      const ch = text[i];
+      if (ch === '"') return string();
+      if (ch === "{") {
+        const o = Object.create(null), keys = [];
+        ORDER.set(o, keys);
+        i++; ws();
+        if (text[i] === "}") { i++; return o; }
+        for (;;) {
+          ws();
+          if (text[i] !== '"') fail("Expecting property name enclosed in double quotes");
+          const k = string();
+          ws();
+          if (text[i++] !== ":") fail("Expecting ':' delimiter");
+          if (!Object.hasOwn(o, k)) keys.push(k);          // a repeated key keeps its first place and its last value
+          o[k] = value(o, k);
+          ws();
+          const c = text[i++];
+          if (c === "}") return o;
+          if (c !== ",") fail("Expecting ',' delimiter");
+        }
+      }
+      if (ch === "[") {
+        const a = [];
+        i++; ws();
+        if (text[i] === "]") { i++; return a; }
+        for (;;) {
+          a.push(value(a, a.length));
+          ws();
+          const c = text[i++];
+          if (c === "]") return a;
+          if (c !== ",") fail("Expecting ',' delimiter");
+        }
+      }
+      for (const [word, v] of LITERALS) {
+        if (text.startsWith(word, i)) { i += word.length; return v; }
+      }
+      for (const word of NOT_FINITE) if (text.startsWith(word, i)) fail(word + " is not a number JSON allows");
+      NUM.lastIndex = i;
+      const m = NUM.exec(text);
+      if (!m) fail("Expecting value");
+      i += m[0].length;
+      if (!(m[1] || m[2]) && m[0].replace("-", "").length > MAX_INT_DIGITS) fail("Exceeds the limit for integer string conversion");
+      const n = Number(m[0]);
+      if (!Number.isFinite(n)) fail("a number too large to check");        // verify._finite
+      tag(holder, key, m[1] || m[2] ? "f" : m[0] === "-0" ? "0" : m[0]);
+      return n;
+    }
+    const out = value([], 0);
+    ws();
+    if (i < text.length) fail("Extra data");
+    return out;
   }
-  const isFloatAt = (holder, key) => !!holder && typeof holder === "object" && FLOATS.has(holder) && FLOATS.get(holder).has(String(key));
-  const isNum = (x) => typeof x === "number" && isFinite(x);
+  const tagAt = (holder, key) => holder && typeof holder === "object" && TAGS.has(holder) ? TAGS.get(holder).get(String(key)) : undefined;
+  const keysOf = (o) => ORDER.get(o) || Object.keys(o);      // the order the block wrote them in
+  const isNum = (x) => typeof x === "number";                 // as verify._plain_number: NaN, inf and huge integers count
   // The block is written by a model, so any shape can arrive: a wrong shape is a failed check, read the way the Python reads it.
   const isDict = (x) => !!x && typeof x === "object" && !Array.isArray(x);
-  const truthy = (x) => Array.isArray(x) || typeof x === "string" ? x.length > 0 : isDict(x) ? Object.keys(x).length > 0 : !!x;
+  const truthy = (x) => Array.isArray(x) || typeof x === "string" ? x.length > 0 : isDict(x) ? Object.keys(x).length > 0 : typeof x === "number" ? x !== 0 : !!x;   // bool(): NaN is true
   // verify._as_list: a list stays a list; null, "" and {} are nothing; any other lone value is a list of one
   const asList = (x) => Array.isArray(x) ? x : x == null || x === "" || (isDict(x) && !Object.keys(x).length) ? [] : [x];
   const named = (d, name) => typeof name === "string" && Object.hasOwn(d, name) ? d[name] : null;   // verify._named
@@ -208,19 +287,19 @@
     }
     return out + q;
   }
-  // Python's repr(): what str() of a list or dict shows for each item. isFloat: the number was written as a float.
-  function pyRepr(x, isFloat = false) {
+  // Python's repr(): what str() of a list or dict shows for each item. tag: how the number was written (see parseJson).
+  function pyRepr(x, tag) {
     if (typeof x === "string") return pyStrRepr(x);
     if (x == null) return "None";
     if (typeof x === "boolean") return x ? "True" : "False";
-    if (typeof x === "number") return isFloat || !Number.isInteger(x) ? pyFloatRepr(x) : Math.abs(x) >= 1e21 ? BigInt(x).toString() : String(Object.is(x, -0) ? 0 : x);
-    if (Array.isArray(x)) return "[" + x.map((v, i) => pyRepr(v, isFloatAt(x, i))).join(", ") + "]";
-    return "{" + Object.entries(x).map(([k, v]) => pyStrRepr(k) + ": " + pyRepr(v, isFloatAt(x, k))).join(", ") + "}";
+    if (typeof x === "number") return tag === "f" || (tag === undefined && !Number.isInteger(x)) ? pyFloatRepr(x) : typeof tag === "string" ? tag : Math.abs(x) >= 1e21 ? BigInt(x).toString() : String(Object.is(x, -0) ? 0 : x);
+    if (Array.isArray(x)) return "[" + x.map((v, i) => pyRepr(v, tagAt(x, i))).join(", ") + "]";
+    return "{" + keysOf(x).map((k) => pyStrRepr(k) + ": " + pyRepr(x[k], tagAt(x, k))).join(", ") + "}";
   }
-  const pyStr = (x, isFloat = false) => typeof x === "string" ? x : pyRepr(x, isFloat);      // Python's str()
-  const pyField = (o, key) => pyStr(o[key], isFloatAt(o, key));                               // str(o.get(key))
+  const pyStr = (x, tag) => typeof x === "string" ? x : pyRepr(x, tag);      // Python's str()
+  const pyField = (o, key) => pyStr(o[key], tagAt(o, key));                               // str(o.get(key))
   // [str(u) for u in verify._as_list(o.get(key))]
-  const pyStrList = (o, key) => Array.isArray(o[key]) ? o[key].map((u, i) => pyStr(u, isFloatAt(o[key], i))) : asList(o[key]).map((u) => pyStr(u, isFloatAt(o, key)));
+  const pyStrList = (o, key) => Array.isArray(o[key]) ? o[key].map((u, i) => pyStr(u, tagAt(o[key], i))) : asList(o[key]).map((u) => pyStr(u, tagAt(o, key)));
   const pyType = (x) => Array.isArray(x) ? "list" : typeof x === "string" ? "str" : typeof x === "number" ? (Number.isInteger(x) ? "int" : "float") : typeof x === "boolean" ? "bool" : "dict";
   const DIGITS = "\\d(?:_?\\d)*", FLOAT = new RegExp("^[+-]?(?:" + DIGITS + "(?:\\.(?:" + DIGITS + ")?)?|\\." + DIGITS + ")(?:[eE][+-]?" + DIGITS + ")?$");
   function pyFloat(x) {                         // Python's float(): a number or a numeric string; null, "", lists and objects raise
@@ -257,7 +336,8 @@
     const subj = isDict(rawSubj) ? rawSubj : {};
     add("identity: company, ticker, exchange and share class given", ["company", "ticker", "exchange", "share_class"].every((f) => pyStr(truthy(subj[f]) ? subj[f] : "").trim()));
     const input = (n) => (Object.hasOwn(inputs, n) && isDict(inputs[n]) && isNum(inputs[n].value)) ? inputs[n].value : null;
-    for (const [name, v] of Object.entries(inputs)) {
+    for (const name of keysOf(inputs)) {
+      const v = inputs[name];
       if (!v || typeof v !== "object" || Array.isArray(v)) { add("input " + name + " is an object", false); continue; }
       if (v.value == null) { add(name + ": missing value is listed in unknown", unknown.has(name)); continue; }
       add(name + ": value is a plain number", isNum(v.value));
@@ -275,9 +355,12 @@
     if (price !== null && shares !== null) add("market cap = price x fully diluted shares", close(mc, price * shares));
     else if (mc !== null) add("market cap has both inputs", false);
     const ev = plainNumber(outputs.enterprise_value), debt = input("debt"), cash = input("cash");
-    if (mc !== null && debt !== null && cash !== null) add("EV = market cap + debt + preferred + minority interest - cash", close(ev, mc + debt + (input("preferred") || 0) + (input("minority_interest") || 0) - cash));
+    const or0 = (x) => truthy(x) ? x : 0;        // Python's `x or 0.0`, where NaN is true
+    if (mc !== null && debt !== null && cash !== null) add("EV = market cap + debt + preferred + minority interest - cash", close(ev, mc + debt + or0(input("preferred")) + or0(input("minority_interest")) - cash));
     else if (ev !== null) add("EV has its inputs", false);
-    const values = Object.assign({}, ...Object.keys(inputs).map((n) => ({ [n]: input(n) })), { market_cap: mc, enterprise_value: ev });
+    const values = Object.create(null);           // no prototype: an input named "__proto__" is just a name
+    for (const n of keysOf(inputs)) values[n] = input(n);
+    values.market_cap = mc; values.enterprise_value = ev;
     const listed = asList(outputs.multiples), multiples = listed.filter(isDict);
     add("every multiple is an object", multiples.length === listed.length);
     for (const m of multiples) {
@@ -296,11 +379,11 @@
       add("multiple " + pyField(m, "name") + ": one kind of period", kinds.size <= 1);
     }
     const rev = input("revenue"), rev0 = input("revenue_prior");
-    if (ev !== null && rev && ev / rev > 50) add("EV/revenue above 50x is flagged", flagged("outlier"));
-    if (rev && rev0 && rev0 > 0 && rev / rev0 - 1 > 3) add("revenue growth above 300% is flagged", flagged("outlier"));
+    if (ev !== null && truthy(rev) && ev / rev > 50) add("EV/revenue above 50x is flagged", flagged("outlier"));
+    if (truthy(rev) && truthy(rev0) && rev0 > 0 && rev / rev0 - 1 > 3) add("revenue growth above 300% is flagged", flagged("outlier"));
     for (const name of ["net_income", "operating_income", "gross_profit"]) {
       const x = input(name);
-      if (x !== null && rev && !(x / rev >= -1 && x / rev <= 1)) add(name + " margin outside -100%..100% is flagged", flagged("outlier"));
+      if (x !== null && truthy(rev) && !(x / rev >= -1 && x / rev <= 1)) add(name + " margin outside -100%..100% is flagged", flagged("outlier"));
     }
     const scen = k.scenarios, rating = k.rating;
     add("rating is one of the four", typeof rating === "string" && RATINGS.has(rating), pyStr(rating));
@@ -320,7 +403,7 @@
         const want = cases.reduce((a, c) => a + vals[c] * probs[c] / 100, 0);
         add("PWV matches the probabilities and values", close(plainNumber(scen.pwv), want));   // from the checked numbers, not the raw text
         const ref = plainNumber(scen.reference_price), er = plainNumber(scen.expected_return_pct);
-        if (ref) {
+        if (truthy(ref)) {
           add("expected return = PWV / reference price - 1", er !== null && Math.abs(er - 100 * (want / ref - 1)) < 0.5);
           for (const c of cases) if (vals[c] > 5 * ref || vals[c] < ref / 5) add(c + " value beyond 5x / one-fifth of the price is flagged", flagged("outlier"));
         }
@@ -336,7 +419,7 @@
         }
         const stop = plainNumber(k.stop_working_price);
         add("a rating comes with a stop-working price", stop !== null);
-        if (stop !== null && ref) add("stop-working price below the reference price", stop < ref);
+        if (stop !== null && truthy(ref)) add("stop-working price below the reference price", stop < ref);
       }
     } else add("a rated stock has scenarios", false);
     return out;

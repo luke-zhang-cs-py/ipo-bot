@@ -136,3 +136,17 @@ def test_one_unpriceable_ticker_leaves_its_row_pending(monkeypatch):
     monkeypatch.setattr(track, "closes", gone)
     import datetime as dt
     assert track.close_on("GONE", dt.date(2025, 1, 2)) is None
+
+
+@pytest.mark.parametrize("raw", ["[" * 30000 + "]" * 30000, '{"key_numbers": {"x": ' + "9" * 5000 + "}}"],
+                         ids=["deep", "huge-number"])
+def test_a_block_nested_too_deep_or_with_a_huge_number_is_a_block_error_not_a_crash(raw):
+    with pytest.raises(verify.BlockError, match="not valid JSON"):
+        verify.extract(f"memo\n```json\n{raw}\n```")
+
+
+@pytest.mark.parametrize("bad", ["NaN", "Infinity", "-Infinity", "1e400", "9" * 400])
+def test_a_number_the_maths_cannot_take_fails_the_block_not_the_checker(bad):
+    memo = '```json\n{"key_numbers": {"rating": "NOT RATED", "scenarios": {"bull": {"prob": %s}}}}\n```' % bad
+    (name, ok, detail), = verify.check_memo(memo)
+    assert not ok and "not valid JSON" in detail

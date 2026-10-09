@@ -106,6 +106,28 @@ def test_data_is_dropped_when_the_source_alone_is_too_long(monkeypatch):
     assert out["data"] is None and out["truncated"] is True
 
 
+def test_a_wide_object_of_long_strings_is_trimmed_in_a_few_passes(monkeypatch):
+    wide = {f"item{i}": "y" * 300 for i in range(2_000)}
+    calls = []
+    trim = tools._trim
+    monkeypatch.setattr(tools, "_trim", lambda data, excess: calls.append(1) or trim(data, excess))
+    text = tools._result("wide", wide)
+    out = json.loads(text)
+    assert len(text) <= tools.MAX_RESULT_CHARS and out["truncated"] is True and 0 < len(out["data"]) < 2_000
+    assert all(wide[k].startswith(v) and len(v) >= tools.LONG_STRING for k, v in out["data"].items())
+    assert len(calls) <= 3 * (len(wide) + 1)          # each pass visits every value once: not one value per pass
+
+
+def test_escaped_text_is_cut_by_its_json_length_not_its_characters():
+    text = '"' * 1_000                                    # 2,002 characters of JSON
+    cut = tools._cut(text, 500)
+    assert tools._size(text) - 506 <= tools._size(cut) <= tools._size(text) - 500   # about 500 off, not 1,000
+    dense = "" * 300 + "a" * 300                     # escapes first: a proportional cut keeps too many
+    cut = tools._cut(dense, 300)
+    assert dense.startswith(cut) and tools._size(cut) <= tools._size(dense) - 300 and len(cut) >= tools.LONG_STRING
+    assert tools._cut(text, 0) == text
+
+
 # ----------------------------------------------------------------------------- EDGAR
 
 def test_edgar_needs_a_user_agent_with_an_email_and_a_real_cik(monkeypatch):

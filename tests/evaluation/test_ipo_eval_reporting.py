@@ -140,18 +140,26 @@ def test_platt_is_fitted_on_training_years_only_and_skipped_without_enough():
     assert folds[0]["calibrator"] is None and folds[0]["calibrated"] == folds[0]["scores"]   # 2015 alone: no inner split
     assert folds[-1]["calibrator"] is not None and folds[-1]["calibrated"] != folds[-1]["scores"]
     test_rows = {r["adsh"] for r in folds[-1]["rows"]}
-    seen = []
-    platt = E.platt
+    seen, inner = [], []
+    platt, fit_year = E.platt, E.fit_year
 
     def spy(train, market, names, l2):
         seen.append({r["adsh"] for r in train})
-        return platt(train, market, names, l2)
+        E.fit_year = lambda rows_, *a: inner.append({r["adsh"] for r in rows_}) or fit_year(rows_, *a)
+        try:
+            return platt(train, market, names, l2)
+        finally:
+            E.fit_year = fit_year
     E.platt, saved = spy, E.platt
     try:
         E.walk_forward(rows, market, years=[2018], names=SMALL, calibrate=True)
     finally:
         E.platt = saved
     assert seen and not seen[0] & test_rows                                           # never a test IPO
+    by_year = {y: {r["adsh"] for r in rows if r["prices"]["listing_date"][:4] == y} for y in ("2015", "2016", "2017")}
+    assert seen[0] >= by_year["2017"]                                                 # 2017 is the last training year
+    # the inner split: the model inside platt is refitted without that last year, on the years before it
+    assert inner == [seen[0] - by_year["2017"]] and not inner[0] & by_year["2017"] and inner[0] & by_year["2016"]
 
 
 def test_paired_comparisons_and_reliability():

@@ -91,21 +91,29 @@ def _size(v):
 
 
 def _trim(data, excess):
-    """data about `excess` characters smaller, taken from its largest part: a long string loses its end (never
-    below LONG_STRING); a list whose largest item stands out (over twice the mean) trims that item, else it drops
-    items from its end; a dict trims its largest value or, when that cannot shrink, drops its largest entries.
+    """data about `excess` characters of JSON smaller, taken from its largest parts in one pass: a long string loses
+    its end (never below LONG_STRING characters), measured in JSON characters, so escaped text is not over-cut; a
+    list whose largest item stands out (over twice the mean) trims that item, else it drops items from its end; a
+    dict trims every value that can shrink by its share of the excess (by size) or, when none can, drops its
+    largest entries.
     Returns data unchanged only when nothing in it can be cut."""
     if isinstance(data, str):
-        return data[:max(LONG_STRING, len(data) - excess)] if len(data) > LONG_STRING else data
+        return _cut(data, excess)
     if not isinstance(data, (list, dict)) or not data:
         return data
     keys = list(range(len(data))) if isinstance(data, list) else list(data)
     sizes = {k: _size(data[k]) for k in keys}
-    big = max(keys, key=sizes.get)
-    if isinstance(data, dict) or len(data) == 1 or sizes[big] > 2 * sum(sizes.values()) / len(data):
-        child = _trim(data[big], excess)
-        if child != data[big]:
-            return [child if k == big else data[k] for k in keys] if isinstance(data, list) else {**data, big: child}
+    if isinstance(data, dict):
+        weight = {k: sizes[k] if _shrinkable(data[k]) else 0 for k in keys}
+        total = sum(weight.values())
+        if total:          # each value that can shrink takes its share of the excess, rounded up
+            return {k: _trim(v, -(-excess * weight[k] // total)) if weight[k] else v for k, v in data.items()}
+    else:
+        big = max(keys, key=sizes.get)
+        if len(data) == 1 or sizes[big] > 2 * sum(sizes.values()) / len(data):
+            child = _trim(data[big], excess)
+            if child != data[big]:
+                return [child if k == big else data[k] for k in keys]
     drop, cut = set(), 0
     order = reversed(keys) if isinstance(data, list) else sorted(keys, key=sizes.get, reverse=True)
     for k in order:                                        # the list's tail, or the dict's largest entries
@@ -116,6 +124,23 @@ def _trim(data, excess):
     if isinstance(data, list):
         return [data[k] for k in keys if k not in drop]
     return {k: v for k, v in data.items() if k not in drop}
+
+
+def _shrinkable(v):
+    """Whether _trim can cut v: a string over LONG_STRING characters, or a list or dict with something in it."""
+    return len(v) > LONG_STRING if isinstance(v, str) else isinstance(v, (list, dict)) and bool(v)
+
+
+def _cut(text, excess):
+    """text about `excess` JSON characters shorter, never below LONG_STRING characters: the cut is sized by the
+    JSON length (an escaped character counts as its escape), then made exact by stepping back over escapes."""
+    if len(text) <= LONG_STRING or excess <= 0:
+        return text
+    target = _size(text) - excess
+    n = max(LONG_STRING, len(text) * target // _size(text))
+    while n > LONG_STRING and _size(text[:n]) > target:   # dense escapes: a few more characters off
+        n = max(LONG_STRING, n - max(1, (_size(text[:n]) - target) // 6))
+    return text[:n]
 
 
 # ----------------------------------------------------------------------------- SEC EDGAR

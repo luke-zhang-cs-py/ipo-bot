@@ -147,8 +147,9 @@ def range_reading(text: str) -> Optional[Tuple[Range, str]]:
     - "midpoint": the stated range disagreed with the midpoint the body assumes ("an assumed ... price of $105.00
       per share, which is the midpoint of the price range"), as when an amendment moves the range but its cover
       still shows the old one (Snowflake's second S-1/A: $75-85 on the cover, $105 assumed, $110 in the fee
-      table), so the range is rebuilt around that midpoint: up to the fee table's maximum when it has one above
-      the midpoint, else with the stated range's width;
+      table), so the range is rebuilt around that midpoint with the stated range's width, or up to the fee
+      table's maximum when the range moved up and that maximum is about the stated half-width above the midpoint
+      (a range cut down often keeps its old maximum in the fee table, so a downward move never uses it);
     - "assumed": no range, a single assumed price (common for small fixed-price deals), returned as (p, p).
       It is a reference price, not a range the offer can land above or below."""
     for pat in _STATED:
@@ -160,8 +161,10 @@ def range_reading(text: str) -> Optional[Tuple[Range, str]]:
         mid = _stated_midpoint(text)
         if mid is None or abs((lo + hi) / 2 - mid) <= max(0.011, 0.005 * mid):
             return (lo, hi), "stated"
-        top = _fee_table_max(text, mid)
-        half = top - mid if top else (hi - lo) / 2
+        half = (hi - lo) / 2
+        top = _fee_table_max(text, mid) if mid > (lo + hi) / 2 else None  # a cut range's fee table keeps the old top
+        if top is not None and abs(top - mid - half) <= 0.5 * half:
+            half = top - mid
         if _plausible(mid - half) and _plausible(mid + half):
             return (round(mid - half, 4), round(mid + half, 4)), "midpoint"
         return (mid, mid), "assumed"

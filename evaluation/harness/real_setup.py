@@ -5,7 +5,11 @@ ipo_setup()     the pre-listing IPO model from evaluation/ipo_eval.py (same feat
                 evening before it lists), it is predicted at 13:00 UTC on the listing day (before the 13:30 open),
                 and its first-day return is published at 21:00 UTC (after the close). An event "pops" when its
                 first day is ipo_eval.POP (20%) or more. Every listing from 2015 to 2023 is an event, so the walk-forward starts with
-                nothing known, as it would have; 2024 on is the sealed holdout and is left out entirely.
+                nothing known, as it would have; 2024 on is the sealed holdout and is left out entirely. The
+                sample is ipo_eval's main one (ipo_eval.usable): an offer outside the range filed before it is
+                dropped, but a "suspect" open (outside 0.5-4x the offer, judged on the listing day itself) stays
+                in, since leaving it out would read the day being predicted; ipo_eval's robustness sample is the
+                one without them.
 market_setup()  the benchmark's stock algorithms (evaluation/benchmark.py) on its 30 US large caps: each
                 month-end, next month's return. Closes are stamped at 21:00 UTC on the month-end, predictions at
                 22:00 UTC, the outcome at the next month-end's close. The 30 are today's large caps, a
@@ -71,6 +75,7 @@ def ipo_threshold():
     return ipo_eval.POP - ipo_eval.POP_TOL
 
 def ipo_store():
+    """The IPO store and events, from ipo_eval.usable's main sample before the holdout: suspect opens included."""
     import ipo_data
     import ipo_eval
     rows = [r for r in ipo_eval.usable(ipo_data.load()) if r["prices"]["listing_date"] < ipo_eval.HOLDOUT_FROM]

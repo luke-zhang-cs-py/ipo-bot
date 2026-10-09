@@ -11,6 +11,7 @@ stale data nobody flagged.
 """
 import datetime as dt
 import json
+import math
 import re
 import sys
 
@@ -28,15 +29,45 @@ class BlockError(ValueError):
     pass
 
 
+class _NotFinite(ValueError):
+    pass
+
+
+def _refuse(word):
+    raise _NotFinite(f"{word} is not a number JSON allows")
+
+
+def _finite(n):
+    """n when it fits a float: NaN, Infinity and numbers too big for a float would crash the maths, not fail a check."""
+    try:
+        ok = math.isfinite(float(n))
+    except OverflowError:
+        ok = False
+    if not ok:
+        raise _NotFinite("a number too large to check")
+    return n
+
+
+def _loads(raw):
+    return json.loads(raw, parse_constant=_refuse, parse_float=lambda s: _finite(float(s)),
+                      parse_int=lambda s: _finite(int(s)))
+
+
 def extract(memo):
     """The key_numbers object from the last ```json block in the memo."""
     blocks = re.findall(r"```json\s*(.*?)```", memo, re.S | re.I)
     bad = None
     for raw in reversed(blocks):           # an invalid block (an example, a stray snippet) does not hide a valid one
         try:
-            data = json.loads(raw)
+            data = _loads(raw)
         except json.JSONDecodeError as e:
             bad = bad or e
+            continue
+        except _NotFinite as e:            # NaN, Infinity, or a number no float can hold
+            bad = bad or json.JSONDecodeError(str(e), raw, 0)
+            continue
+        except (RecursionError, ValueError):   # nested too deep to parse, or a number too long to read
+            bad = bad or json.JSONDecodeError("nested too deep or too long to read", raw, 0)
             continue
         if isinstance(data, dict) and isinstance(data.get("key_numbers"), dict):
             return data["key_numbers"]

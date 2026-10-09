@@ -521,3 +521,24 @@ def test_price_range_prefers_the_stated_midpoint_and_tolerates_lost_ligatures() 
     assert prospectus.range_reading("an assumed offering price of $7.00") == ((7.0, 7.0), "assumed")
     assert prospectus.range_reading("an oﬀering price will be between $3 and $5") == ((3.0, 5.0), "stated")
     assert prospectus.shares_offered(",,,,,, Shares") is None
+
+
+def _moved(lo: float, hi: float, mid: float, fee: float) -> str:
+    return (
+        f"Proposed Maximum Offering Price Per Share (2) Class A common stock 10,000,000 ${fee:.2f} "
+        f"the initial public offering price will be between ${lo:.2f} and ${hi:.2f} per share. "
+        f"an assumed initial public offering price of ${mid:.2f} per share, which is the midpoint of the price range"
+    )
+
+
+def test_a_range_cut_down_keeps_its_width_and_ignores_the_fee_tables_old_maximum() -> None:
+    # cover $17-19 (stale), midpoint $15, fee table still at the old $19: about $14-16, not $11-19
+    assert prospectus.range_reading(_moved(17, 19, 15, 19)) == ((14.0, 16.0), "midpoint")
+    assert prospectus.range_reading(_moved(17, 19, 15, 16.5)) == ((14.0, 16.0), "midpoint")  # even when it would fit
+
+
+def test_a_range_moved_up_takes_the_fee_tables_maximum_only_near_the_stated_half_width() -> None:
+    assert prospectus.range_reading(_moved(75, 85, 105, 111)) == ((99.0, 111.0), "midpoint")  # 6 off: within half
+    assert prospectus.range_reading(_moved(75, 85, 105, 107.5)) == ((102.5, 107.5), "midpoint")  # 2.5 off: the edge
+    assert prospectus.range_reading(_moved(75, 85, 105, 107.49)) == ((100.0, 110.0), "midpoint")  # just past it
+    assert prospectus.range_reading(_moved(75, 85, 105, 150)) == ((100.0, 110.0), "midpoint")  # far off: the width

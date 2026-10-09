@@ -41,8 +41,9 @@ process.stdin.on('data', (d) => input += d).on('end', () => {
 """
 
 
-def run_js(job):
-    r = subprocess.run([NODE, "-e", DRIVER, str(CORE)], input=json.dumps(job), capture_output=True, text=True, timeout=60)
+def run_js(job, prefix=""):
+    r = subprocess.run([NODE, "-e", prefix + DRIVER, str(CORE)], input=json.dumps(job), capture_output=True, text=True,
+                       encoding="utf-8", timeout=60)
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)
 
@@ -175,6 +176,50 @@ def broken_blocks():
     yield edit(lambda k: (k["inputs"].update({"['debt']": {"value": None}}), k.update(unknown=[["debt"]])))
     yield edit(lambda k: (k["inputs"].update({"{'a': 1.0}": {"value": None}}), k.update(unknown=[{"a": 1.0}])))
     yield edit(lambda k: (k["inputs"]["price"].update(as_of="2026-10-01"), k.update(flags=[["stale", 1.0]])))
+    # keys stay in the order the block wrote them, integer-like ones too: in str() of a dict and in the per-input checks
+    for name in ({"b": 1, "1": 2}, [{"z": 0, "10": 1.0, "2": None}]):
+        yield edit(lambda k, name=name: k["outputs"]["multiples"][0].update(name=name))
+    yield edit(lambda k: k["inputs"].update({"2": {"value": None}, "1": {"value": None}, "0": 5}))
+    yield edit(lambda k: (k["inputs"].update({"{'b': 1, '1': 2}": {"value": None}}), k.update(unknown=[{"b": 1, "1": 2}])))
+    # integers are printed from their digits past 2^53; one past the largest float makes the block invalid
+    for name in (2**53 + 1, -(2**64), 10**400, [2**70, 1.0], {"n": 10**30}):
+        yield edit(lambda k, name=name: k["outputs"]["multiples"][0].update(name=name))
+    yield edit(lambda k: (k["inputs"].update({str(2**60 + 1): {"value": None}}), k.update(unknown=[2**60 + 1])))
+    yield edit(lambda k: k["inputs"].update(other={"value": 10**400, "source": "S-1", "as_of": "2026-10-06"}))
+    # NaN and Infinity would crash the maths (round(nan), float(10**400)): both sides refuse the block instead
+    nan, inf = float("nan"), float("inf")
+    for name in (nan, inf, -inf, [nan, inf], {"x": -inf}):
+        yield edit(lambda k, name=name: k["outputs"]["multiples"][0].update(name=name))
+    yield edit(lambda k: k["inputs"]["debt"].update(value=nan))
+    yield edit(lambda k: k["inputs"]["revenue"].update(value=nan))
+    yield edit(lambda k: k["inputs"].update(preferred={"value": nan, "source": "S-1", "as_of": "2026-10-06"}))
+    yield edit(lambda k: k["outputs"].update(market_cap=inf))
+    yield edit(lambda k: k["scenarios"].update(reference_price=nan))
+    yield edit(lambda k: k["scenarios"].update(pwv=nan, expected_return_pct=-inf))
+    yield edit(lambda k: k.update(stop_working_price=nan))
+    yield edit(lambda k: k["scenarios"]["bull"].update(prob=nan))
+    yield edit(lambda k: k["scenarios"]["bull"].update(value=10**400))
+    yield edit(lambda k: k["inputs"]["price"].update(value=10**400))
+    # an input named __proto__ is a name like any other: a multiple can divide by it
+    proto = {"value": 1_000_000_000, "source": "S-1", "as_of": "2026-10-06"}
+    yield edit(lambda k: (k["inputs"].update(__proto__=proto), k["outputs"]["multiples"][0].update(denominator="__proto__")))
+    yield edit(lambda k: (k["inputs"].update(__proto__=proto), k["outputs"]["multiples"][0].update(numerator="__proto__", denominator="revenue")))
+    yield edit(lambda k: k["outputs"]["multiples"][0].update(name={"__proto__": 1, "a": 2}))
+
+
+# JSON written the way json.dumps never writes it, in place of the multiple's name: the browser must read it as json.loads does
+RAW = ['-0', '-0.0', '1E400', '-Infinity', '1.0e2', '12345678901234567890123', '{"a": 1, "1": 0, "a": 2.0}',
+       '{"__proto__": [1], "constructor": 2}', '"\\ud83d"', '"\\ud83d\\ude00"', '"\\/\\b\\f"', '"\\u00e9"',
+       '9' * 4301, '9' * 4300,
+       # not JSON to Python either: each makes the block invalid
+       '"a\tb"', '"\\u12"', '"\\x41"', '[1,]', '01', '1.', '.5', '+1', 'nan', 'NaNx', '-NaN', 'infinity', "'a'", '{"a" 1}',
+       '{1: 2}', '[1 2]', 'tru', '"open']
+
+
+def raw_memos():
+    b = copy.deepcopy(BLOCK)
+    b["key_numbers"]["outputs"]["multiples"][0]["name"] = "@@"
+    return [memo_with(b).replace('"@@"', raw) for raw in RAW]
 
 
 def test_sizing_matches_the_python_to_the_cent():
@@ -199,13 +244,34 @@ def test_portfolio_values_and_breaches_match():
         assert got["breaches"] == v["rule_breaches"]
 
 
-def test_every_memo_check_matches_the_python():
-    memos = [memo_with(b) for b in broken_blocks()] + ["no block here", "```json\n{oops\n```",
-             memo_with(BLOCK) + "\n```json\n{oops\n```"]          # a stray invalid snippet does not hide the real block
-    js = run_js({"sizes": [], "views": [], "memos": memos})["memos"]
+def all_memos():
+    return [memo_with(b) for b in broken_blocks()] + raw_memos() + ["no block here", "```json\n{oops\n```",
+            memo_with(BLOCK) + "\n```json\n{oops\n```"]           # a stray invalid snippet does not hide the real block
+
+
+def assert_memos_match(memos, js):
+    assert len(js) == len(memos)
     for memo, got in zip(memos, js):
         want = [[name, ok] for name, ok, _ in verify.check_memo(memo)]
         assert got == want, (memo[:80], [x for x in got if x not in want], [x for x in want if x not in got])
+
+
+def test_every_memo_check_matches_the_python():
+    memos = all_memos()
+    assert_memos_match(memos, run_js({"sizes": [], "views": [], "memos": memos})["memos"])
+
+
+# Browsers before Chrome 114, Firefox 135 and Safari 18.4 give JSON.parse's reviver no source text: the checks must not
+# depend on it, so the same memos run again with JSON.parse stripped of that argument.
+OLD_BROWSER = """
+const parse = JSON.parse;
+JSON.parse = function (text, reviver) { return reviver ? parse(text, function (k, v) { return reviver.call(this, k, v); }) : parse(text); };
+"""
+
+
+def test_the_checks_do_not_need_the_reviver_source_text():
+    memos = all_memos()
+    assert_memos_match(memos, run_js({"sizes": [], "views": [], "memos": memos}, prefix=OLD_BROWSER)["memos"])
 
 
 # ----------------------------------------------------------------------------- projection charts (JS only)

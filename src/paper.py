@@ -13,8 +13,11 @@ logged) have closed since: SimBroker when a quote's bid reaches the stop, Alpaca
 filled sells since the buy say at what price. Each one gets an exit line ({"exit": {"day", "symbol", "shares",
 "price", "stopped"}}) and goes to the monitor, so its cooldown and stoploss guard see stop-outs from this run and
 every earlier one. Every line records its broker ("sim", "alpaca", ...): simulated runs and --alpaca runs share
-the log, and a broker is asked only about the positions it opened. A position Alpaca no longer holds with no
-filled sell to show for it gets a note line, not an exit; a broker that fails to answer gets a warning line.
+the log, a broker is asked only about the positions it opened, and the monitor learns only that broker's exits.
+A line from before brokers were recorded counts as "sim" (only simulated runs came before). A position Alpaca no
+longer holds with no filled sell to show for it gets a note line with an "unpriced_exit" ({"symbol"}): it is
+closed for later runs but, having no price, not an exit the monitor learns. A broker that fails to answer gets a
+warning line.
 
 The forward test the brief asks for is two weeks or more of this against Alpaca's paper account: set
 ALPACA_KEY_ID and ALPACA_SECRET_KEY in .env (a free paper account; no real money moves) and run it daily.
@@ -93,10 +96,12 @@ class AlpacaPaper:
         return {"order_id": oid, "filled": filled, "avg_price": avg, "fee": 0.0, "status": status}
 
     def closed(self, positions):
-        """The positions (open_positions' shape) Alpaca no longer holds, priced from the filled sells since the
+        """The positions (open_positions' shape) Alpaca no longer holds, priced from the sells filled since the
         position's last buy (its "since"): shares and price are those sells' total and fill-weighted average, and
         it counts as stopped when a stop order sold some of it or the average is at or under its stop. One gone
-        with no such sell (closed by hand, or never this account's) comes back as {"symbol", "note"}, not an exit."""
+        with no such sell (closed by hand, or never this account's) comes back as {"symbol", "note"}, not an exit.
+        The query has no "after": Alpaca's filters on when an order was submitted, and a stop placed with the
+        first buy fills after the second; the fill time is checked here instead, on the latest closed sells."""
         held = {str(p.get("symbol", "")).upper() for p in self.http("GET", f"{self.base}/v2/positions") or []}
         out = []
         for sym, pos in positions.items():
@@ -104,14 +109,14 @@ class AlpacaPaper:
                 continue
             since = pos.get("since")
             q = urllib.parse.urlencode({"status": "closed", "symbols": sym, "side": "sell", "direction": "desc",
-                                        "limit": SELL_ORDERS_LIMIT, **({"after": since} if since else {})})
+                                        "limit": SELL_ORDERS_LIMIT})
             sells = [o for o in self.http("GET", f"{self.base}/v2/orders?{q}") or []
                      if float(o.get("filled_qty") or 0) > 0 and o.get("filled_avg_price")
                      and not (since and o.get("filled_at")
                               and monitor_mod.parse_time(o["filled_at"]) < monitor_mod.parse_time(since))]
             if not sells:
                 out.append({"symbol": sym, "note": f"Alpaca no longer holds {sym} but shows no filled sell since "
-                                                   "its buy: no exit logged"})
+                                                   "its buy: closed, unpriced (no exit for the monitor)"})
                 continue
             shares = sum(float(o["filled_qty"]) for o in sells)
             price = sum(float(o["filled_qty"]) * float(o["filled_avg_price"]) for o in sells) / shares
@@ -135,15 +140,16 @@ def read_log(log=LOG):
 
 
 def open_positions(lines, broker=None):
-    """{symbol: {"shares", "stop", "since"?}}: what the log's fills bought, less what its exit lines closed. A second
-    buy of a stock adds its shares and moves the stop to the newer one; "since" is when the last buy was logged.
-    broker: only the lines that broker wrote (a line from before brokers were recorded counts for any)."""
+    """{symbol: {"shares", "stop", "since"?}}: what the log's fills bought, less what its exit and unpriced-exit
+    lines closed. A second buy of a stock adds its shares and moves the stop to the newer one; "since" is when the
+    last buy was logged. broker: only the lines that broker wrote (a line from before brokers were recorded is
+    "sim"'s)."""
     pos = {}
     for ln in lines:
-        if broker is not None and ln.get("broker", broker) != broker:
+        if broker is not None and ln.get("broker", "sim") != broker:
             continue
-        if "exit" in ln:
-            pos.pop(str(ln["exit"]["symbol"]).upper(), None)
+        if "exit" in ln or "unpriced_exit" in ln:
+            pos.pop(str((ln.get("exit") or ln["unpriced_exit"])["symbol"]).upper(), None)
         elif (ln.get("result") or {}).get("stop_order"):
             order = ln["result"]["stop_order"]
             sym = str(order["symbol"]).upper()
@@ -155,16 +161,18 @@ def open_positions(lines, broker=None):
 def run(signals, view, broker, log=LOG, clock=time.time, monitor=None, now=None):
     """Each signal through the monitor, the rules and the broker, one log line each. Returns the signal lines.
     First, the log's open positions from this broker that it reports closed (a broker with closed()) are logged
-    as exits and recorded in the monitor; if it fails to answer, a warning line is logged and the signals go on. A monitor made here also learns every exit already in the log; one passed in keeps
-    its own history (a replay passes the same monitor to every day's run and records its stop-outs itself)."""
+    as exits and recorded in the monitor; if it fails to answer, a warning line is logged and the signals go on.
+    A monitor made here also learns the exits this broker already logged (a line with no broker is "sim"'s), so a
+    simulated stop-out does not pause an --alpaca run; one passed in keeps its own history (a replay passes the
+    same monitor to every day's run and records its stop-outs itself)."""
     log.parent.mkdir(parents=True, exist_ok=True)
     earlier = read_log(log)
+    name = getattr(broker, "name", type(broker).__name__.lower())
     if monitor is None:
         monitor = monitor_mod.Monitor(kill_file=log.parent / "KILL")
         for ln in earlier:
-            if "exit" in ln:
+            if "exit" in ln and ln.get("broker", "sim") == name:
                 monitor.record_exit(ln["exit"]["day"], ln["exit"]["symbol"], ln["exit"]["stopped"])
-    name = getattr(broker, "name", type(broker).__name__.lower())
     held = open_positions(earlier, broker=name)
     warning = None
     try:
@@ -178,7 +186,8 @@ def run(signals, view, broker, log=LOG, clock=time.time, monitor=None, now=None)
             f.write(json.dumps({"logged": _stamp(), "broker": name, "warning": warning}) + "\n")
         for e in closed:
             if "note" in e:
-                f.write(json.dumps({"logged": _stamp(), "broker": name, "note": e["note"]}) + "\n")
+                f.write(json.dumps({"logged": _stamp(), "broker": name, "note": e["note"],    # closed: not asked again
+                                    "unpriced_exit": {"symbol": e["symbol"]}}) + "\n")
                 continue
             e = {"day": today, **e}
             monitor.record_exit(e["day"], e["symbol"], e["stopped"])

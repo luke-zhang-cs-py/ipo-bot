@@ -59,16 +59,37 @@ def test_an_alpaca_run_after_a_sim_run_writes_no_exits_for_the_sim_positions(tmp
     assert paper.open_positions(paper.read_log(log), broker="alpaca") == {}
 
 
-def test_a_gone_alpaca_position_with_no_filled_sell_gets_a_note_not_an_exit(tmp_path):
+def test_a_gone_alpaca_position_with_no_filled_sell_is_closed_unpriced_once_and_not_an_exit(tmp_path):
     log = tmp_path / "log.jsonl"
     old = {"result": {"stop_order": {"symbol": "OLD", "shares": 5, "stop": 40.0}}}       # before brokers were recorded
     log.write_text(json.dumps(old) + "\n" + json.dumps({"broker": "alpaca", "logged": "2026-10-01T15:00:00+00:00",
                    "result": {"stop_order": {"symbol": "NEW", "shares": 4, "stop": 40.0}}}) + "\n", encoding="utf-8")
-    paper.run([], view(), paper.AlpacaPaper("k", "s", http=FakeAlpaca(), wait_s=0.0), log=log, now="2026-10-02T14:00Z")
+    fake = FakeAlpaca()
+    for day in ("2026-10-02", "2026-10-03"):                       # the second run asks nothing and notes nothing
+        paper.run([], view(), paper.AlpacaPaper("k", "s", http=fake, wait_s=0.0), log=log, now=day + "T14:00Z")
     added = paper.read_log(log)[2:]
-    assert [ln.get("note", "")[:28] for ln in added] == ["Alpaca no longer holds OLD b", "Alpaca no longer holds NEW b"]
-    assert all(ln["broker"] == "alpaca" and "exit" not in ln for ln in added)
-    assert set(paper.open_positions(paper.read_log(log))) == {"OLD", "NEW"}    # still open, still the monitor's
+    assert [ln.get("note", "")[:28] for ln in added] == ["Alpaca no longer holds NEW b"]   # OLD is sim's: not asked
+    assert added[0]["broker"] == "alpaca" and added[0]["unpriced_exit"] == {"symbol": "NEW"} and "exit" not in added[0]
+    assert len([u for u in fake.urls if u.endswith("/v2/positions")]) == 1
+    assert paper.open_positions(paper.read_log(log), broker="alpaca") == {}                  # closed: no phantom shares
+    assert set(paper.open_positions(paper.read_log(log), broker="sim")) == {"OLD"}
+    assert paper.divergence(added)["exits"] == 0                           # no price: not counted an exit
+
+
+def test_a_sim_stop_out_does_not_pause_an_alpaca_run(tmp_path):
+    log = tmp_path / "log.jsonl"
+    exits = [{"broker": "sim", "exit": {"day": "2026-10-01", "symbol": "AAA", "shares": 1, "price": 1.0, "stopped": True}},
+             {"exit": {"day": "2026-10-01", "symbol": "BBB", "shares": 1, "price": 1.0, "stopped": True}}]   # pre-broker
+    log.write_text("".join(json.dumps(x) + "\n" for x in exits), encoding="utf-8")
+
+    def http(method, url, body=None):
+        return {"id": "o1", "status": "filled", "filled_qty": str(body["qty"]) if body else "0", "filled_avg_price": "50.0"}
+    alpaca = paper.AlpacaPaper("k", "s", http=http, wait_s=0.0)
+    out = paper.run([sig("AAA"), sig("BBB")], view(), alpaca, log=log, now="2026-10-02T14:00Z")
+    assert [ln["result"]["status"] for ln in out] == ["filled", "filled"]          # sim's exits: no cooldown here
+    sim = paper.run([sig("AAA"), sig("BBB")], view(), execution.SimBroker(quotes("AAA", "BBB")), log=log,
+                    now="2026-10-02T14:00Z")
+    assert [ln["result"]["status"] for ln in sim] == ["stopped by the monitor"] * 2   # but sim's own run sees them
 
 
 # ----------------------------------------------------------------------------- 2. a broker outage
@@ -117,8 +138,22 @@ def test_the_exit_averages_every_filled_sell_since_the_last_buy():
     assert out["AAA"] == {"symbol": "AAA", "shares": 10, "price": 48.8, "stopped": True, "day": "2026-10-03"}
     assert out["BBB"] == {"symbol": "BBB", "shares": 2.5, "price": 60.0, "stopped": False}
     aaa_q = [u for u in fake.urls if "symbols=AAA" in u][0]
-    assert f"limit={paper.SELL_ORDERS_LIMIT}" in aaa_q and "after=2026-10-01T14" in aaa_q
-    assert "after=" not in [u for u in fake.urls if "symbols=BBB" in u][0]
+    assert f"limit={paper.SELL_ORDERS_LIMIT}" in aaa_q and not [u for u in fake.urls if "after=" in u]
+
+
+def test_a_stop_placed_before_a_second_buy_and_filled_after_it_is_still_the_exit():
+    # Alpaca's "after" filters on submission: the GTC stop went in with the first buy (09-28) and filled on 10-02,
+    # after the second buy (10-01). The query has no "after", so it comes back, and its fill time keeps it.
+    stop = {"filled_qty": "10", "type": "stop", "filled_avg_price": "44.0", "submitted_at": "2026-09-28T14:00:00Z",
+            "filled_at": "2026-10-02T15:00:00Z"}
+    pos = {"AAA": {"shares": 10, "stop": 45.0, "since": "2026-10-01T14:00:00+00:00"}}
+    fake = FakeAlpaca(sells={"AAA": [stop]})
+
+    def alpaca(method, url, body=None):                   # Alpaca's own "after": orders submitted after it, only
+        after = dict(paper.urllib.parse.parse_qsl(paper.urllib.parse.urlsplit(url).query)).get("after")
+        return [o for o in fake(method, url, body) if not after or o.get("submitted_at", "") > after]
+    (out,) = paper.AlpacaPaper("k", "s", http=alpaca, wait_s=0.0).closed(pos)
+    assert out == {"symbol": "AAA", "shares": 10, "price": 44.0, "stopped": True, "day": "2026-10-02"}
 
 
 def test_open_positions_keeps_when_the_last_buy_was_logged_and_skips_other_brokers():
@@ -134,7 +169,9 @@ def test_open_positions_keeps_when_the_last_buy_was_logged_and_skips_other_broke
 
 def test_an_evening_run_in_new_york_is_dated_by_its_utc_day():
     assert monitor.utc_day("2026-10-02T21:00:00-04:00") == dt.date(2026, 10, 3)
-    assert monitor.utc_day(None) == dt.datetime.now(dt.timezone.utc).date()
+    before = dt.datetime.now(dt.timezone.utc).date()
+    today = monitor.utc_day(None)
+    assert today in (before, dt.datetime.now(dt.timezone.utc).date())      # the same day, even across midnight UTC
     m = monitor.Monitor(kill_file=pathlib.Path("no-such-KILL"), cooldown_days=0)
     m.record_exit("2026-10-03", "AAA", False)                     # Alpaca's filled_at date for a 01:00 UTC fill
     assert m.gate(sig("AAA"), now="2026-10-02T21:00:00-04:00") == "cooldown: AAA was sold on 2026-10-03"
