@@ -157,12 +157,25 @@
     let bad = null;
     for (const raw of blocks.reverse()) {           // an invalid block (an example, a stray snippet) does not hide a valid one
       let data;
-      try { data = JSON.parse(raw); } catch (e) { bad = bad || e; continue; }
+      try { data = parseJson(raw); } catch (e) { bad = bad || e; continue; }
       if (isDict(data) && isDict(data.key_numbers)) return data.key_numbers;
     }
     if (bad) throw new Error("the KEY NUMBERS block is not valid JSON (" + bad.message + ")");
     throw new Error('no ```json block with a "key_numbers" object');
   }
+  // JSON.parse drops Python's int/float split ("1.0" and "1" both become 1), so note which numbers were written as floats
+  // (by their source text, where the engine gives it) for pyStr to print the way Python's str() does: 1.0, not 1
+  const FLOATS = new WeakMap();
+  function parseJson(raw) {
+    return JSON.parse(raw, function (key, value, ctx) {
+      if (typeof value === "number" && ctx && typeof ctx.source === "string" && /[.eE]/.test(ctx.source)) {
+        if (!FLOATS.has(this)) FLOATS.set(this, new Set());
+        FLOATS.get(this).add(key);
+      }
+      return value;
+    });
+  }
+  const isFloatAt = (holder, key) => !!holder && typeof holder === "object" && FLOATS.has(holder) && FLOATS.get(holder).has(String(key));
   const isNum = (x) => typeof x === "number" && isFinite(x);
   // The block is written by a model, so any shape can arrive: a wrong shape is a failed check, read the way the Python reads it.
   const isDict = (x) => !!x && typeof x === "object" && !Array.isArray(x);
@@ -171,7 +184,43 @@
   const asList = (x) => Array.isArray(x) ? x : x == null || x === "" || (isDict(x) && !Object.keys(x).length) ? [] : [x];
   const named = (d, name) => typeof name === "string" && Object.hasOwn(d, name) ? d[name] : null;   // verify._named
   const plainNumber = (x) => isNum(x) ? x : null;                                                   // verify._plain_number
-  const pyStr = (x) => typeof x === "string" ? x : x == null ? "None" : typeof x === "boolean" ? (x ? "True" : "False") : typeof x === "object" ? JSON.stringify(x) : String(x);
+  function pyFloatRepr(x) {                     // Python's repr(float): shortest digits, exponent form below 1e-4 and from 1e16
+    if (x !== x) return "nan";
+    if (!isFinite(x)) return x > 0 ? "inf" : "-inf";
+    if (x === 0) return Object.is(x, -0) ? "-0.0" : "0.0";
+    const [mant, e] = x.toExponential().split("e"), exp = +e;
+    if (exp < -4 || exp >= 16) return mant + "e" + (exp < 0 ? "-" : "+") + String(Math.abs(exp)).padStart(2, "0");
+    const s = String(x);
+    return s.includes(".") ? s : s + ".0";
+  }
+  const NON_PRINTABLE = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Zs}]/u;
+  function pyStrRepr(s) {                       // Python's repr(str): single quotes unless only the double quote is free
+    const q = s.includes("'") && !s.includes('"') ? '"' : "'";
+    let out = q;
+    for (const ch of s) {
+      const c = ch.codePointAt(0);
+      if (ch === "\\" || ch === q) out += "\\" + ch;
+      else if (ch === "\n") out += "\\n";
+      else if (ch === "\r") out += "\\r";
+      else if (ch === "\t") out += "\\t";
+      else if (ch !== " " && NON_PRINTABLE.test(ch)) out += c < 0x100 ? "\\x" + c.toString(16).padStart(2, "0") : c < 0x10000 ? "\\u" + c.toString(16).padStart(4, "0") : "\\U" + c.toString(16).padStart(8, "0");
+      else out += ch;
+    }
+    return out + q;
+  }
+  // Python's repr(): what str() of a list or dict shows for each item. isFloat: the number was written as a float.
+  function pyRepr(x, isFloat = false) {
+    if (typeof x === "string") return pyStrRepr(x);
+    if (x == null) return "None";
+    if (typeof x === "boolean") return x ? "True" : "False";
+    if (typeof x === "number") return isFloat || !Number.isInteger(x) ? pyFloatRepr(x) : Math.abs(x) >= 1e21 ? BigInt(x).toString() : String(Object.is(x, -0) ? 0 : x);
+    if (Array.isArray(x)) return "[" + x.map((v, i) => pyRepr(v, isFloatAt(x, i))).join(", ") + "]";
+    return "{" + Object.entries(x).map(([k, v]) => pyStrRepr(k) + ": " + pyRepr(v, isFloatAt(x, k))).join(", ") + "}";
+  }
+  const pyStr = (x, isFloat = false) => typeof x === "string" ? x : pyRepr(x, isFloat);      // Python's str()
+  const pyField = (o, key) => pyStr(o[key], isFloatAt(o, key));                               // str(o.get(key))
+  // [str(u) for u in verify._as_list(o.get(key))]
+  const pyStrList = (o, key) => Array.isArray(o[key]) ? o[key].map((u, i) => pyStr(u, isFloatAt(o[key], i))) : asList(o[key]).map((u) => pyStr(u, isFloatAt(o, key)));
   const pyType = (x) => Array.isArray(x) ? "list" : typeof x === "string" ? "str" : typeof x === "number" ? (Number.isInteger(x) ? "int" : "float") : typeof x === "boolean" ? "bool" : "dict";
   const DIGITS = "\\d(?:_?\\d)*", FLOAT = new RegExp("^[+-]?(?:" + DIGITS + "(?:\\.(?:" + DIGITS + ")?)?|\\." + DIGITS + ")(?:[eE][+-]?" + DIGITS + ")?$");
   function pyFloat(x) {                         // Python's float(): a number or a numeric string; null, "", lists and objects raise
@@ -186,7 +235,13 @@
     throw new TypeError("not a number: " + pyStr(x));
   }
   const close = (a, b, rel = REL_TOL, abs = ABS_TOL) => a != null && b != null && Math.abs(a - b) <= Math.max(rel * Math.max(Math.abs(a), Math.abs(b)), abs);
-  const date = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || "")); if (!m) return null; const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])); return d.getUTCMonth() === +m[2] - 1 ? d : null; };
+  const date = (s) => {                         // verify._date: str(s) must start YYYY-MM-DD and be a real day (years 1-9999)
+    const m = /^([0-9]{4})-([0-9]{2})-([0-9]{2})/.exec(pyStr(s));
+    if (!m || +m[1] < 1) return null;
+    const d = new Date(0);
+    d.setUTCFullYear(+m[1], +m[2] - 1, +m[3]);  // not Date.UTC, which reads years 0-99 as 1900-1999
+    return d.getUTCMonth() === +m[2] - 1 ? d : null;
+  };
   function tradingDays(a, b) { let n = 0; for (let d = new Date(a.getTime() + 864e5); d <= b; d = new Date(d.getTime() + 864e5)) if (d.getUTCDay() % 6) n++; return n; }
 
   function check(k) {
@@ -194,7 +249,7 @@
     const rawIn = truthy(k.inputs) ? k.inputs : {}, rawOut = truthy(k.outputs) ? k.outputs : {};
     add("inputs is an object", isDict(rawIn), pyType(rawIn));
     add("outputs is an object", isDict(rawOut), pyType(rawOut));
-    const inputs = isDict(rawIn) ? rawIn : {}, outputs = isDict(rawOut) ? rawOut : {}, unknown = new Set(asList(k.unknown).map(pyStr));
+    const inputs = isDict(rawIn) ? rawIn : {}, outputs = isDict(rawOut) ? rawOut : {}, unknown = new Set(pyStrList(k, "unknown"));
     const asOf = date(k.as_of);
     add("as_of date present", asOf !== null);
     const rawSubj = truthy(k.subject) ? k.subject : {};
@@ -206,11 +261,11 @@
       if (!v || typeof v !== "object" || Array.isArray(v)) { add("input " + name + " is an object", false); continue; }
       if (v.value == null) { add(name + ": missing value is listed in unknown", unknown.has(name)); continue; }
       add(name + ": value is a plain number", isNum(v.value));
-      add(name + ": has a source", !!String(v.source || "").trim());
+      add(name + ": has a source", !!(truthy(v.source) ? pyField(v, "source") : "").trim());
       add(name + ": has an as-of date", date(v.as_of) !== null);
     }
     add("sources are listed", asList(k.sources).length > 0);
-    const flagged = (...words) => { const t = asList(k.flags).map(pyStr).join(" ").toLowerCase(); return words.every((w) => t.includes(w.toLowerCase())); };
+    const flagged = (...words) => { const t = pyStrList(k, "flags").join(" ").toLowerCase(); return words.every((w) => t.includes(w.toLowerCase())); };
     const p = isDict(inputs.price) ? inputs.price : null;
     if (p && date(p.as_of) && asOf && (p.basis || "last close") !== "offer midpoint") {
       const lag = tradingDays(date(p.as_of), asOf);
@@ -227,18 +282,18 @@
     add("every multiple is an object", multiples.length === listed.length);
     for (const m of multiples) {
       const n = named(values, m.numerator), d = named(values, m.denominator), val = plainNumber(m.value);
-      if (n == null || d == null || d === 0) add("multiple " + pyStr(m.name) + ": inputs present", false);
-      else add("multiple " + pyStr(m.name) + " recomputes", close(val, n / d, 0.01));
+      if (n == null || d == null || d === 0) add("multiple " + pyField(m, "name") + ": inputs present", false);
+      else add("multiple " + pyField(m, "name") + " recomputes", close(val, n / d, 0.01));
     }
     for (const seg of asList(k.segments).filter(isDict)) {
       const total = named(values, seg.total), parts = asList(seg.parts).map((x) => isDict(x) ? plainNumber(x.value) : null);
-      if (total != null && parts.length && !parts.includes(null)) add("segments add up to " + pyStr(seg.total), close(parts.reduce((a, b) => a + b, 0), total, 0.01));
+      if (total != null && parts.length && !parts.includes(null)) add("segments add up to " + pyField(seg, "total"), close(parts.reduce((a, b) => a + b, 0), total, 0.01));
     }
     for (const m of multiples) {
       const periods = [m.numerator, m.denominator].filter((x) => isDict(named(inputs, x))).map((x) => pyStr(truthy(inputs[x].period) ? inputs[x].period : ""));
       const kinds = new Set();
-      for (const per of periods.concat([String(m.name || "")])) for (const w of ["LTM", "NTM", "FY"]) if (new RegExp("\\b" + w).test(per.toUpperCase())) kinds.add(w);
-      add("multiple " + pyStr(m.name) + ": one kind of period", kinds.size <= 1);
+      for (const per of periods.concat([truthy(m.name) ? pyField(m, "name") : ""])) for (const w of ["LTM", "NTM", "FY"]) if (new RegExp("\\b" + w).test(per.toUpperCase())) kinds.add(w);
+      add("multiple " + pyField(m, "name") + ": one kind of period", kinds.size <= 1);
     }
     const rev = input("revenue"), rev0 = input("revenue_prior");
     if (ev !== null && rev && ev / rev > 50) add("EV/revenue above 50x is flagged", flagged("outlier"));

@@ -156,6 +156,25 @@ def broken_blocks():
     yield edit(lambda k: k.update(scenarios=[1, 2, 3]))
     yield edit(lambda k: k.update(ipo_ratings=["Participate"]))
     yield edit(lambda k: k.update(rating="NOT RATED", scenarios={}))
+    # a source is what Python's str() makes of it: {} is nothing, [" "] is the text "[' ']"
+    for bad in ({}, [" "], [], " ", 0, 1.0, ["[1] quote"]):
+        yield edit(lambda k, bad=bad: k["inputs"]["debt"].update(source=bad))
+    # a date must be written YYYY-MM-DD: not in a list, not the compact or week forms fromisoformat also takes
+    for bad in (["2026-10-06"], "20261006", "2026-W41-1", "2026-02-30", "0000-10-06", "2026-13-01", "2026-10-06T09:30:00Z",
+                20261006, None, "", "0999-12-31"):
+        yield edit(lambda k, bad=bad: k.update(as_of=bad))
+        yield edit(lambda k, bad=bad: k["inputs"]["revenue"].update(as_of=bad))
+        yield edit(lambda k, bad=bad: k["inputs"]["price"].update(as_of=bad))
+    # a multiple's name is str() of whatever was written, for the period check and in every check name
+    for name in ({"p": "NTM"}, ["EV/Revenue", "NTM"], 1.0, 2.5, 1e16, 1.5e-5, -0.0, 7, True, None, "",
+                 ["x", 1.0, None, True, False, "it's", 'say "hi"', "both ' and \"", "a\nb\\c\t", "\xa0", "\u200b", {"a": [1.0, 2]}]):
+        yield edit(lambda k, name=name: k["outputs"]["multiples"][0].update(name=name))
+    # unknown holds str() of each entry: 1.0 names the input "1.0", not "1"
+    yield edit(lambda k: (k["inputs"].update({"1.0": {"value": None}}), k.update(unknown=[1.0])))
+    yield edit(lambda k: (k["inputs"].update({"1.0": {"value": None}}), k.update(unknown=1.0)))
+    yield edit(lambda k: (k["inputs"].update({"['debt']": {"value": None}}), k.update(unknown=[["debt"]])))
+    yield edit(lambda k: (k["inputs"].update({"{'a': 1.0}": {"value": None}}), k.update(unknown=[{"a": 1.0}])))
+    yield edit(lambda k: (k["inputs"]["price"].update(as_of="2026-10-01"), k.update(flags=[["stale", 1.0]])))
 
 
 def test_sizing_matches_the_python_to_the_cent():

@@ -80,9 +80,16 @@ def _trading_days_between(a, b):
     return sum((a + dt.timedelta(d)).weekday() < 5 for d in range(1, days + 1))
 
 
+ISO_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")   # fromisoformat alone also takes "20261006" and "2026-W41-1"
+
+
 def _date(s):
+    """The date a model-written field starts with, written YYYY-MM-DD, else None."""
+    text = str(s)
+    if not ISO_DAY.match(text):
+        return None
     try:
-        return dt.date.fromisoformat(str(s)[:10])
+        return dt.date.fromisoformat(text[:10])
     except ValueError:
         return None
 
