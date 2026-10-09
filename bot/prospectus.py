@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import html
 import re
+from collections import Counter
 from typing import Optional, Sequence, Tuple, Union
 
 # Bookrunners, most-named first; the first one found on the cover is taken as the lead.
@@ -89,6 +90,21 @@ SHARES_MIN, SHARES_MAX = 50_000, 5_000_000_000
 
 Range = Tuple[float, float]
 
+# A dollar amount: it starts with a digit, so a blank template's "$ ," (an S-1 filed before its range) is no amount.
+_AMOUNT = r"(\d[\d,]*(?:\.\d+)?)"
+_MONEY = r"\$\s?" + _AMOUNT
+# "offering", also when a filing's "ff" ligature came through as one character or was lost ("o_ering" in Lyft's).
+_OFFERING = "o(?:ff|_|\ufb00)ering"
+_STATED = (
+    rf"between {_MONEY} and {_MONEY} per (?:share|ADS|American)",
+    rf"{_OFFERING} price[^.$]{{0,80}}between {_MONEY} and {_MONEY}",
+)
+_ASSUMED = rf"assum(?:ed|ing an?) (?:initial public )?{_OFFERING} price (?:per (?:share|ADS) )?of {_MONEY}"
+_MIDPOINT = (
+    rf"{_MONEY}(?: per (?:share|ADS))?\s?,\s?which is the mid-?point of the (?:estimated )?(?:{_OFFERING} )?price range"
+)
+_FEE_MAX = rf"Maximum (?:Aggregate )?{_OFFERING} Price Per (?:Share|ADS)"
+
 
 def text_of(raw: Union[bytes, str]) -> str:
     """Plain text from a filing's HTML: scripts and styles dropped, tags removed, entities read, whitespace collapsed."""
@@ -112,7 +128,7 @@ def offer_price(text: str, rng: Optional[Sequence[float]] = None) -> Optional[fl
     ("$1.50 per share") is not taken for the price."""
     candidates = []
     for pat in (
-        r"initial public offering price (?:is|of|per (?:share|ADS)[^$]{0,40}?)\s*\$\s?([\d,]+(?:\.\d+)?)",
+        r"initial public offering price (?:is|of|per (?:share|ADS)[^$]{0,40}?)\s*" + _MONEY,
         r"public offering price[^$]{0,60}\$\s?([\d,]+\.\d\d) per (?:share|ADS|American)",
         r"\$\s?([\d,]+\.\d\d) per (?:share|ADS)",
     ):
@@ -124,24 +140,68 @@ def offer_price(text: str, rng: Optional[Sequence[float]] = None) -> Optional[fl
     return candidates[0] if candidates else None
 
 
-def price_range(text: str) -> Optional[Range]:
-    """The marketed price range (low, high) from a preliminary prospectus, or None. A single assumed price (common
-    for small fixed-price deals) is returned as (p, p)."""
-    m = re.search(
-        r"between \$\s?([\d,]+(?:\.\d+)?) and \$\s?([\d,]+(?:\.\d+)?) per (?:share|ADS|American)", text, re.I
-    ) or re.search(r"offering price[^.$]{0,80}between \$\s?([\d,]+(?:\.\d+)?) and \$\s?([\d,]+(?:\.\d+)?)", text, re.I)
+def range_reading(text: str) -> Optional[Tuple[Range, str]]:
+    """The marketed price range (low, high) from a preliminary prospectus and where it came from, or None:
+
+    - "stated": the range the filing states ("between $14.00 and $16.00 per share");
+    - "midpoint": the stated range disagreed with the midpoint the body assumes ("an assumed ... price of $105.00
+      per share, which is the midpoint of the price range"), as when an amendment moves the range but its cover
+      still shows the old one (Snowflake's second S-1/A: $75-85 on the cover, $105 assumed, $110 in the fee
+      table), so the range is rebuilt around that midpoint: up to the fee table's maximum when it has one above
+      the midpoint, else with the stated range's width;
+    - "assumed": no range, a single assumed price (common for small fixed-price deals), returned as (p, p).
+      It is a reference price, not a range the offer can land above or below."""
+    for pat in _STATED:
+        m = re.search(pat, text, re.I)
+        if m:
+            break
     if m and PRICE_MIN <= _num(m.group(1)) <= _num(m.group(2)) <= PRICE_MAX:
-        return _num(m.group(1)), _num(m.group(2))
-    m = re.search(r"assumed (?:initial public )?offering price of \$\s?([\d,]+(?:\.\d+)?)", text, re.I)
+        lo, hi = _num(m.group(1)), _num(m.group(2))
+        mid = _stated_midpoint(text)
+        if mid is None or abs((lo + hi) / 2 - mid) <= max(0.011, 0.005 * mid):
+            return (lo, hi), "stated"
+        top = _fee_table_max(text, mid)
+        half = top - mid if top else (hi - lo) / 2
+        if _plausible(mid - half) and _plausible(mid + half):
+            return (round(mid - half, 4), round(mid + half, 4)), "midpoint"
+        return (mid, mid), "assumed"
+    m = re.search(_ASSUMED, text, re.I)
     if m and _plausible(_num(m.group(1))):
-        return _num(m.group(1)), _num(m.group(1))
+        return (_num(m.group(1)), _num(m.group(1))), "assumed"
     return None
+
+
+def _stated_midpoint(text: str) -> Optional[float]:
+    """The price the body assumes as "the midpoint of the price range", the most often stated one, or None."""
+    if not re.search("mid-?point", text, re.I):  # a quick look first: most filings never say it
+        return None
+    mids = [v for v in (_num(m.group(1)) for m in re.finditer(_MIDPOINT, text, re.I)) if _plausible(v)]
+    return Counter(mids).most_common(1)[0][0] if mids else None
+
+
+def _fee_table_max(text: str, mid: float) -> Optional[float]:
+    """The registration fee table's maximum price per share, when it is above the stated midpoint (by at most half
+    again): the top of the range the midpoint belongs to. None when there is no such table or amount."""
+    m = re.search(_FEE_MAX, text, re.I)
+    if not m:
+        return None
+    for v in re.finditer(_MONEY, text[m.end() : m.end() + 600]):
+        if mid < _num(v.group(1)) <= 1.5 * mid:
+            return _num(v.group(1))
+    return None
+
+
+def price_range(text: str) -> Optional[Range]:
+    """The marketed price range (low, high) from a preliminary prospectus, or None (see range_reading). A single
+    assumed price is returned as (p, p)."""
+    reading = range_reading(text)
+    return reading[0] if reading else None
 
 
 def shares_offered(text: str) -> Optional[float]:
     """The number of shares or ADSs offered on the cover, or None."""
     m = re.search(
-        r"([\d,]{5,}) (?:Shares|shares of (?:Class [A-Z] )?(?:common|ordinary)|American Depositary Shares|ADSs|Ordinary Shares)",
+        r"(\d[\d,]{4,}) (?:Shares|shares of (?:Class [A-Z] )?(?:common|ordinary)|American Depositary Shares|ADSs|Ordinary Shares)",
         text[:20000],
     )
     if m:

@@ -46,6 +46,9 @@ class Deal:
     first_trade: Optional[Dict[str, Any]] = None  # {date, open, close, symbol, source}
     ipo: bool = True  # False: a follow-on or a SPAC
     why_not: Optional[str] = None
+    # every registration and the final prospectus as (filed, form, parsed document), oldest first: shares, lead
+    # and symbol above are the latest values, the history says what was on file at an earlier moment
+    docs: List[Tuple[str, str, Dict[str, Any]]] = field(default_factory=list)
 
     @property
     def initial_range(self) -> Optional[Tuple[float, float]]:
@@ -66,6 +69,19 @@ class Deal:
             return "postponed"
         return "priced" if self.priced else "effective" if self.effective else "on_file"
 
+    def asof(self, moment: str) -> Dict[str, Any]:
+        """shares, lead, symbol and foreign as the filings dated on or before `moment` give them (a filing is
+        public by the evening of its date). A deal assembled by hand, with no history, keeps its own foreign
+        flag and has no shares or lead."""
+        out: Dict[str, Any] = {"shares": None, "lead": None, "symbol": None, "foreign": self.foreign}
+        known = [(form, doc) for filed, form, doc in self.docs if filed <= moment]
+        if self.docs:
+            out["foreign"] = any(form.startswith("F-") for form, _ in known)
+        for _, doc in known:
+            for k in ("shares", "lead", "symbol"):
+                out[k] = doc.get(k) or out[k]
+        return out
+
     @property
     def first_day_return(self) -> Optional[float]:
         if self.first_trade and self.offer:
@@ -79,7 +95,10 @@ def build(
     companies: Mapping[str, Mapping[str, Any]],
     first_trades: Mapping[str, Mapping[str, Any]],
 ) -> List[Deal]:
-    """Deals from rows already filtered to a moment (store.asof). documents: accession -> parsed JSON."""
+    """Deals from rows already filtered to a moment (store.asof). documents: accession -> parsed JSON.
+
+    A deal's shares, lead and symbol are the latest on file (the final prospectus's, once it is filed); a
+    prediction made before then reads Deal.asof(moment), which keeps to the filings dated by that moment."""
     by_cik: Dict[str, List[Mapping[str, Any]]] = {}
     for f in sorted(filings, key=lambda f: (f["filed"], f["accession"])):
         by_cik.setdefault(str(f["cik"]), []).append(f)
@@ -97,6 +116,7 @@ def build(
         for f in fs:
             doc = json.loads(documents[f["accession"]]) if f["accession"] in documents else {}
             if f["form"] in REGISTRATIONS:
+                d.docs.append((f["filed"], f["form"], doc))
                 if doc.get("range"):
                     d.ranges.append((f["filed"], float(doc["range"][0]), float(doc["range"][1])))
                 d.shares = doc.get("shares") or d.shares
@@ -106,6 +126,7 @@ def build(
                 d.effective = f["filed"]
             elif f["form"] == "424B4" and f["filed"] >= d.registered and not d.priced:
                 d.priced = f["filed"]
+                d.docs.append((f["filed"], f["form"], doc))
                 d.offer = doc.get("offer")
                 d.shares = doc.get("shares") or d.shares
                 d.lead = doc.get("lead") or d.lead

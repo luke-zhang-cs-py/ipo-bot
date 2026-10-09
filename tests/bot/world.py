@@ -1,6 +1,7 @@
 """A synthetic market for offline tests: every source the bot reads, answered from one seeded, made-up world in
 the sources' own formats (Yahoo's chart JSON, Cboe's JSON and CSV, the Treasury's CSV, FRED's CSV, Nasdaq
-Trader's pipe files, Wikipedia's parse API, EDGAR's form indexes, full-text search, submissions and filings).
+Trader's pipe files, Wikipedia's parse API and page history (monthly revisions, the older ones in the old
+table layout), EDGAR's form indexes, full-text search, submissions and filings).
 
 Nothing here is real data. It exists so the whole update can run with no network: prices only up to the
 world's clock, a 2-for-1 split, a special dividend, a delisting, a missing day, a source disagreement, and an
@@ -38,6 +39,8 @@ DELIST_DAY = dt.date(2025, 9, 30)  # GONE's last session
 HOLE_DAY = dt.date(2025, 2, 11)  # Yahoo has no bar for HOLE this day (Cboe does)
 MISMATCH_DAYS = 3  # Cboe's AAA close is 1% off this many sessions before the newest
 SYMBOLS = ("AAA", "BBB", "SPLT", "DIVD", "GONE", "HOLE")
+OLD_LAYOUT = dt.date(2024, 1, 1)  # revisions before this use the page's old column names and no table id
+REV_BASE = 5000  # the revision id of the first month's revision
 
 
 def _seed(*parts: object) -> int:
@@ -80,6 +83,7 @@ class World:
         self.symbols = symbols
         self.fail: Dict[str, Union[int, str]] = {}  # host (or "host/path-fragment") -> HTTP code or "timeout"
         self.schema: Dict[str, bool] = {}  # source name -> answer in a changed format
+        self.broken_revs: set = set()  # Wikipedia revision ids whose table cannot be read
         self.calls: List[str] = []
         self.days = _days(START, HORIZON)
         self.raw = {s: self._path(s) for s in (*symbols, "SPX")}
@@ -237,6 +241,10 @@ class World:
             return self._fred(q["id"])
         if host == "www.nasdaqtrader.com":
             return self._listing(path.rsplit("/", 1)[1])
+        if host == "en.wikipedia.org" and q.get("action") == "query":
+            return self._revisions(q["rvstart"])
+        if host == "en.wikipedia.org" and "oldid" in q:
+            return self._old_wiki(int(q["oldid"]))
         if host == "en.wikipedia.org":
             return self._wiki()
         if host == "efts.sec.gov":
@@ -374,18 +382,63 @@ class World:
             rows.append("SPYX|Synthetic ETF|P|SPYX|Y|100|N|SPYX")
         return ("\r\n".join([head, *rows, stamp]) + "\r\n").encode()
 
-    def members(self) -> List[str]:
-        return [s for s in self.listed() if s != "HOLE" or self.through() > HOLE_DAY]
+    def members(self, on: Optional[dt.date] = None) -> List[str]:
+        """The index on a day (default: the last finished session): GONE until its delisting, HOLE after
+        HOLE_DAY (a joiner, so earlier sessions must not count it)."""
+        d = on or self.through()
+        listed = [s for s in self.symbols if not (s == "GONE" and d > DELIST_DAY)]
+        return [s for s in listed if s != "HOLE" or d > HOLE_DAY]
+
+    def revisions(self) -> List[Tuple[int, dt.datetime]]:
+        """The page's history: a revision on the 20th of each month at noon UTC from START's month (none in
+        July, so August's 1st still sees June's), up to now."""
+        out = []
+        y, m = START.year, START.month
+        while True:
+            t = dt.datetime(y, m, 20, 12, tzinfo=dt.UTC)
+            if t > self.now:
+                return out
+            if m != 7:
+                out.append((REV_BASE + (y - START.year) * 12 + m - START.month, t))
+            y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+
+    def _revisions(self, start: str) -> bytes:
+        t = dt.datetime.fromisoformat(start.replace("Z", "+00:00"))
+        older = [r for r in self.revisions() if r[1] <= t]
+        page: Dict[str, object] = {"pageid": 1, "ns": 0, "title": "List of S&P 500 companies"}
+        if older:
+            revid, when = older[-1]
+            page["revisions"] = [{"revid": revid, "parentid": revid - 1, "timestamp": f"{when:%Y-%m-%dT%H:%M:%SZ}"}]
+        return json.dumps({"batchcomplete": True, "query": {"pages": [page]}}).encode()
+
+    def _old_wiki(self, revid: int) -> bytes:
+        when = dict(self.revisions())[revid]
+        if revid in self.broken_revs:
+            return json.dumps({"parse": {"text": "<p>Vandalised.</p>"}}).encode()
+        return self._page(self.members(when.date()), old=when.date() < OLD_LAYOUT)
 
     def _wiki(self) -> bytes:
         if self.schema.get("wikipedia"):
             return json.dumps({"parse": {"text": "<p>The table moved.</p>"}}).encode()
-        head = "<tr><th>Symbol</th><th>Security</th><th>GICS Sector</th><th>GICS Sub-Industry</th><th>Headquarters Location</th><th>Date added</th><th>CIK</th><th>Founded</th></tr>"
-        rows = [
-            f'<tr>\n<td><a href="x">{s}</a>\n</td>\n<td>{s} &amp; Co</td>\n<td>Industrials</td>\n<td>Machinery</td>\n<td>Here</td>\n<td>2010-01-0{i + 1}</td>\n<td>{1000 + i:010d}</td>\n<td>1900</td></tr>'
-            for i, s in enumerate(self.members())
-        ]
-        html = f'<table class="wikitable" id="constituents">\n<tbody>{head}\n' + "\n".join(rows) + "</tbody></table>"
+        return self._page(self.members(), old=False)
+
+    @staticmethod
+    def _page(members: List[str], old: bool) -> bytes:
+        if old:  # the 2016-2019 layout: no id, "Ticker symbol", "Date first added" with a footnote, no dates
+            head = '<tr><th>Ticker symbol</th><th>Security</th><th>SEC filings</th><th>GICS Sector</th><th>Date first added<sup class="reference"><a href="#n">&#91;3&#93;</a></sup></th><th>CIK</th></tr>'
+            rows = [
+                f'<tr>\n<td><a href="x">{s}</a></td>\n<td>{s} &amp; Co</td>\n<td>reports</td>\n<td>Industrials</td>\n<td></td>\n<td>{1000 + i:010d}</td></tr>'
+                for i, s in enumerate(members)
+            ]
+            table = '<table class="wikitable sortable">\n<tbody>'
+        else:
+            head = "<tr><th>Symbol</th><th>Security</th><th>GICS Sector</th><th>GICS Sub-Industry</th><th>Headquarters Location</th><th>Date added</th><th>CIK</th><th>Founded</th></tr>"
+            rows = [
+                f'<tr>\n<td><a href="x">{s}</a>\n</td>\n<td>{s} &amp; Co</td>\n<td>Industrials</td>\n<td>Machinery</td>\n<td>Here</td>\n<td>2010-01-0{i + 1}</td>\n<td>{1000 + i:010d}</td>\n<td>1900</td></tr>'
+                for i, s in enumerate(members)
+            ]
+            table = '<table class="wikitable" id="constituents">\n<tbody>'
+        html = table + head + "\n" + "\n".join(rows) + "</tbody></table>"
         return json.dumps({"parse": {"title": "List of S&P 500 companies", "text": html}}).encode()
 
     # ------------------------------------------------------------------ EDGAR

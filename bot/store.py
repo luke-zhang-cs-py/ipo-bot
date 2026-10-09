@@ -5,6 +5,17 @@ the bot could first have known it. A source that later changes a value (a split 
 filing is amended) adds a new version; the first release stays. Reading "as of" a moment takes, per key, the
 newest version available by then, so a backtest only ever sees what was knowable on the day. Triggers refuse
 every UPDATE and DELETE, so history cannot be overwritten even by mistake.
+
+The stamping rule for prices (see available()): a bar read soon after its close is stamped when it was read. A
+bar read long after (a backfill) is stamped with its nominal publication time (16:00 New York plus the source's
+delay) only if no split on record falls after its date. A bar with a later split has been rescaled by the source
+(NVDA's 2018 close as served today reflects the 2021 and 2024 splits), so the number stored was not knowable on
+its day: it is stamped with the time it was read. Readers that ask as of a past moment then see only bars as
+they could have been known (features are log differences within one version, so a missing older version only
+shortens the history they see, never mixes scales).
+
+Membership snapshots backfilled from Wikipedia's page history are stamped with the revision's own timestamp:
+that revision was public then, so its table was knowable at that moment.
 """
 
 from __future__ import annotations
@@ -105,13 +116,15 @@ def parse_iso(s: str) -> dt.datetime:
 LIVE_WINDOW = dt.timedelta(days=3)
 
 
-def available(nominal: dt.datetime, fetched: dt.datetime) -> str:
+def available(nominal: dt.datetime, fetched: dt.datetime, rescaled: bool = False) -> str:
     """When a value became knowable. Read soon after it was published, that is when the bot read it (never
     earlier than publication). Read long after (a backfill), the read time says nothing about the past, so the
-    nominal publication time stands in: a close at 16:00 New York plus the source's delay."""
+    nominal publication time stands in (a close at 16:00 New York plus the source's delay), unless the value has
+    since been rescaled (rescaled=True: a split on record after its date): then it is the read time, because
+    the number as served was not what anyone could see on the day."""
     if fetched - nominal <= LIVE_WINDOW:
         return iso(max(nominal, fetched))
-    return iso(nominal)
+    return iso(fetched if rescaled else nominal)
 
 
 class AppendOnlyError(Exception):

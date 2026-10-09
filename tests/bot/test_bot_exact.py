@@ -138,7 +138,7 @@ def test_scores_exactly() -> None:
     s = stats.scores(p, y, v, a)
     assert s["brier"] == pytest.approx(np.mean((p - y) ** 2), abs=1e-15)
     assert s["log_loss"] == pytest.approx(-np.mean(y * np.log(p) + (1 - y) * np.log(1 - p)), abs=1e-15)
-    assert s["hit_rate"] == 0.5  # 0.8 right, 0.3 right, 0.6 wrong, 0.5 is not above 0.5: wrong
+    assert s["hit_rate"] == 0.625  # 0.8 right, 0.3 right, 0.6 wrong, 0.5 calls neither side: half a hit
     assert s["mae"] == pytest.approx(np.mean(np.abs(v - a))) and s["rmse"] == pytest.approx(
         np.sqrt(np.mean((v - a) ** 2))
     )
@@ -467,3 +467,57 @@ def test_prospectus_bounds() -> None:
     assert prospectus.listing_symbol('under the trading symbol "ABC-"') == "ABC"
     assert prospectus.lead_bank("UBS and Goldman Sachs") == "UBS" and prospectus.lead_bank("Leerink") == "SVB Leerink"
     assert prospectus.text_of("<style>x</style>A&amp;B\xa0 C") == " A&B C"
+
+
+# ---------------------------------------------------------------------------- price ranges from real filings
+
+# Excerpts of real S-1/A text (as text_of reads it). Snowflake's second amendment moved the range to $100-110 but its
+# cover still shows $75-85; the body's assumed midpoint ($105) and the fee table's maximum ($110) tell the truth.
+SNOWFLAKE_S1A2 = (
+    "CALCULATION OF REGISTRATION FEE Title of each Class of Securities to be Registered Amount to be Registered (1) "
+    "Proposed Maximum Offering Price Per Share (2) Proposed Maximum Aggregate Offering Price (1)(2) Amount of "
+    "Registration Fee Class A common stock, par value $0.0001 per share 32,200,000 $110.00 $3,542,000,000 "
+    "It is currently estimated that the initial public offering price will be between $75.00 and $85.00 per share. "
+    "Based on an assumed initial public offering price of $105.00 per share, which is the midpoint of the price range "
+    "set forth on the cover page of this prospectus, each of Salesforce Ventures LLC and Berkshire Hathaway Inc. "
+    "assuming an initial public offering price of $105.00 per share, which is the midpoint of the price range set forth"
+)
+# Lyft's last amendment: the "ff" ligature is lost ("o_ering"), so only a tolerant pattern finds the $70-72 range,
+# and the old parser fell back to the assumed $71 as a point range.
+LYFT_S1A3 = (
+    "Prior to this o_ering, there has been no public market for our Class A common stock. It is currently estimated "
+    "that the initial public o_ering price per share will be between $70.00 and $72.00. We have been approved to list "
+    "based upon the assumed initial public offering price of $71.00 per share, which is the midpoint of the estimated "
+    "offering price range set forth on the cover page of this prospectus"
+)
+# A first S-1 filed before the range is set: blanks where the amounts go.
+BLANK_S1 = (
+    "the initial public offering price will be between $ and $ per share. Each $1.00 increase or decrease in the "
+    "assumed initial public offering price per share of $ , which is the midpoint of the price range set forth"
+)
+
+
+def test_price_range_prefers_the_stated_midpoint_and_tolerates_lost_ligatures() -> None:
+    assert prospectus.range_reading(SNOWFLAKE_S1A2) == ((100.0, 110.0), "midpoint")
+    assert prospectus.price_range(SNOWFLAKE_S1A2) == (100.0, 110.0)
+    assert prospectus.range_reading(LYFT_S1A3) == ((70.0, 72.0), "stated")
+    assert prospectus.range_reading(BLANK_S1) is None and prospectus.offer_price(BLANK_S1) is None
+    # no fee table: the stated range's width, centred on the midpoint
+    no_fee = SNOWFLAKE_S1A2.split("$3,542,000,000 ")[1]
+    assert prospectus.range_reading(no_fee) == ((100.0, 110.0), "midpoint")
+    # a fee table with no amount above the midpoint: the width again
+    stale_fee = SNOWFLAKE_S1A2.replace("$110.00", "$85.00")
+    assert prospectus.range_reading(stale_fee) == ((100.0, 110.0), "midpoint")
+    # a range that cannot be rebuilt around the midpoint (it would go below $0.50): the midpoint as an assumed price
+    tiny = "between $1.00 and $9.00 per share. an assumed offering price of $2.00 per share, which is the midpoint of the price range"
+    assert prospectus.range_reading(tiny) == ((2.0, 2.0), "assumed")
+    # within rounding of the midpoint: the stated range stands
+    assert (
+        prospectus.range_reading("between $4.00 and $4.25 per share; $4.13, which is the midpoint of the price range")[
+            1
+        ]
+        == "stated"
+    )
+    assert prospectus.range_reading("an assumed offering price of $7.00") == ((7.0, 7.0), "assumed")
+    assert prospectus.range_reading("an oﬀering price will be between $3 and $5") == ((3.0, 5.0), "stated")
+    assert prospectus.shares_offered(",,,,,, Shares") is None

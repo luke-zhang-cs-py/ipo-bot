@@ -4,9 +4,10 @@ Stocks: a prediction for session t+1 is made at 22:00 UTC on session t (after th
 settles). Its features use closes up to t and macro values whose available_at is at or before that moment
 (the Treasury curve, posted at 18:00 New York, is often the previous day's in winter).
 
-IPOs: a prediction is made when the registration becomes effective (or when the final prospectus appears, if
-no EFFECT notice was read), before the first trade. Features use ranges filed by then, and the first-day
-returns of IPOs that had traded by then.
+IPOs: a prediction is made the evening the registration becomes effective (or the final prospectus appears, if
+no EFFECT notice was read), and only if that is before the first trade. Features use the filings dated by then
+(never the final prospectus's shares or lead filed later), and the first-day returns of IPOs that had traded
+before that day.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from bot import ipos, markets
 STOCK_FEATURES = ("r1", "r5", "r21", "vol21", "off_high", "mkt_r1", "mkt_r5", "vix", "dvix5", "slope")
 IPO_FEATURES = ("range_rev", "range_width", "log_size", "vix", "heat", "top_bank", "foreign")
 DECISION_HOUR_UTC = 22
+POP_TOL = 1e-9  # a first-day return this close below the pop threshold is a pop (floating-point division)
 INDEX = "SPX"
 
 
@@ -105,30 +107,49 @@ def ipo_moment(d: ipos.Deal) -> Optional[str]:
     return d.effective or d.priced
 
 
+def popped(ret: float, pop: float) -> bool:
+    """Whether a first-day return is a pop: at or above the threshold, with a tolerance of POP_TOL so that an
+    offer of 10 closing at 12 (12 / 10 - 1 = 0.19999999999999996 in floating point) is a 20% pop. NaN is not."""
+    return bool(ret >= pop - POP_TOL)
+
+
 def ipo_rows(deals: Sequence[ipos.Deal], macro_rows: pd.DataFrame, pop: float) -> pd.DataFrame:
-    """One row per first-time IPO deal with a range and a prediction moment: IPO_FEATURES, the moment, and
-    (when known) the outcome: ret (first close / offer - 1) and y (ret >= pop)."""
-    cands = [d for d in deals if d.ipo and d.ranges and ipo_moment(d)]
+    """One row per first-time IPO deal with a range and a prediction moment before its first trade: IPO_FEATURES,
+    the moment, and (when known) the outcome: ret (first close / offer - 1) and y (popped).
+
+    Every feature uses only what was public by the moment's evening: ranges, shares, lead bank and the foreign
+    flag from filings dated on or before it (Deal.asof, never the final prospectus filed later), the VIX by its
+    available_at, and the first-day returns of IPOs that traded before the moment's day and whose final
+    prospectus (the offer) was on file by then. A deal whose moment is on or after its first trade (no EFFECT
+    notice was read and the final prospectus came out after listing) has no honest prediction and is dropped."""
+    cands = []
+    for d in deals:
+        m = ipo_moment(d)
+        if not d.ipo or m is None or not any(r[0] <= m for r in d.ranges):
+            continue
+        if d.first_trade and d.first_trade["date"] <= m:
+            continue
+        cands.append((d, m))
     if not cands:
         return pd.DataFrame(columns=["cik", "company", "moment", *IPO_FEATURES, "y", "ret", "trade_date"])
-    moments = [str(ipo_moment(d)) for d in cands]
-    times = [markets.close_utc(dt.date.fromisoformat(m)) + markets.FILING_DELAY for m in moments]
+    times = [markets.close_utc(dt.date.fromisoformat(m)) + markets.FILING_DELAY for _, m in cands]
     vix = macro_asof(macro_rows, times)
     traded = sorted(
         (
-            (d.first_trade["date"], d.first_day_return)
+            (d.first_trade["date"], d.priced or d.first_trade["date"], d.first_day_return)
             for d in deals
             if d.ipo and d.first_trade and d.first_day_return is not None
         ),
         key=lambda x: x[0],
     )
     rows: List[Dict[str, object]] = []
-    for i, (d, m) in enumerate(zip(cands, moments)):
-        rngs = [r for r in d.ranges if r[0] <= m] or d.ranges[:1]
+    for i, (d, m) in enumerate(cands):
+        rngs = [r for r in d.ranges if r[0] <= m]
         lo0, hi0 = rngs[0][1], rngs[0][2]
         lo, hi = rngs[-1][1], rngs[-1][2]
         mid0, mid = (lo0 + hi0) / 2, (lo + hi) / 2
-        past = [r for t, r in traded if t < m][-20:]
+        known = d.asof(m)
+        past = [r for t, priced, r in traded if t < m and priced <= m][-20:]
         rows.append(
             {
                 "cik": d.cik,
@@ -136,16 +157,16 @@ def ipo_rows(deals: Sequence[ipos.Deal], macro_rows: pd.DataFrame, pop: float) -
                 "moment": m,
                 "range_rev": mid / mid0 - 1,
                 "range_width": (hi - lo) / mid,
-                "log_size": math.log(d.shares * mid) if d.shares else np.nan,
+                "log_size": math.log(known["shares"] * mid) if known["shares"] else np.nan,
                 "vix": vix["VIX"].iloc[i] if "VIX" in vix else np.nan,
                 "heat": float(np.mean(past)) if len(past) >= 5 else np.nan,
-                "top_bank": float(d.lead in ipos.TOP_BANKS),
-                "foreign": float(d.foreign),
+                "top_bank": float(known["lead"] in ipos.TOP_BANKS),
+                "foreign": float(known["foreign"]),
                 "ret": d.first_day_return,
                 "trade_date": d.first_trade["date"] if d.first_trade else None,
             }
         )
     df = pd.DataFrame(rows)
     df["ret"] = df["ret"].astype(float)
-    df["y"] = (df["ret"] >= pop).astype(float).where(df["ret"].notna())
+    df["y"] = df["ret"].map(lambda r: float(popped(r, pop))).where(df["ret"].notna())
     return df.sort_values(["moment", "cik"]).reset_index(drop=True)

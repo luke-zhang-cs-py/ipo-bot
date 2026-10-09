@@ -89,6 +89,7 @@ def _jsonable(summary: Dict[str, Any]) -> Dict[str, Any]:
 def daily(ctx: Ctx) -> Dict[str, Any]:
     symbols = collect.update_universe(ctx)
     prices = collect.update_prices(ctx, symbols)
+    leavers = collect.backfill_leavers(ctx, symbols)
     macro = collect.update_macro(ctx)
     day = markets.last_closed_session(ctx.now)
     bars = data.bars(ctx.store, symbols=symbols)
@@ -102,6 +103,7 @@ def daily(ctx: Ctx) -> Dict[str, Any]:
     return {
         "symbols": len(symbols),
         "price_sources": _tally(prices),
+        "leavers_read": leavers,
         "macro": macro,
         "reconciled": reconciled,
         "reconcile_failures": sum(not r["ok"] for r in reconciled),
@@ -135,7 +137,7 @@ def weekly(ctx: Ctx) -> Dict[str, Any]:
     ipo_rows = tracking.ipo_inputs(st, ctx.cfg.ipo_pop)
     ipo = evaluate.ipo_walkforward(ipo_rows)
     rep_i = evaluate.report(ipo, "moment", ("model", "base", "recent"))
-    syms = data.members(st)
+    syms = data.universe(st)  # every past and present member: the panel's symbols
     closes = data.closes(st, None, [*syms, features.INDEX])
     dates = list(closes.index)
     cut_s = [dates[int(len(dates) * f)] for f in (0.5, 0.75, 0.95)] if len(dates) > 300 else dates[-3:-2]

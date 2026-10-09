@@ -1,5 +1,10 @@
 """Collection: the universe, daily prices and macro series, read incrementally into the store.
 
+The universe has a past as well as a present: one membership snapshot per month since history_start, read from
+the page history of Wikipedia's list (the revision current on the 1st of each month) and stamped with that
+revision's time, so a backtest can include a stock only on days it was in the index. Past members that are no
+longer in the index get their price history read once, a few each run.
+
 Each step reads only what is new (from the newest stored day, re-reading a few days before it to catch
 revisions), falls back to a second source when the first fails, and records a warning instead of stopping
 the run when a source is down.
@@ -8,13 +13,15 @@ the run when a source is down.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import math
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
-from bot import checks, markets
-from bot.adapters import cboe, cboe_vix, fred, nasdaqtrader, treasury, wikipedia, yahoo
+from bot import checks, data, markets
+from bot.adapters import cboe, cboe_vix, fred, nasdaqtrader, treasury, wikipedia, wikipedia_revisions, yahoo
 from bot.adapters.base import first_ok, read
 from bot.context import Ctx
+from bot.log import event
 from bot.store import available, iso
 
 LEFT_WINDOW = dt.timedelta(days=30)  # how long a symbol that left is still collected
@@ -65,6 +72,7 @@ def update_universe(ctx: Ctx) -> List[str]:
         ctx.count("universe_rows", st.put("universe", rows, ctx.run_id, ctx.at))
     else:
         ctx.warn("universe_not_refreshed", source="wikipedia", error=res.failures[-1][1], kept=len(before))
+    update_membership_history(ctx)
     tracked = {r["symbol"] for r in st.asof("universe", where={"source": "wikipedia"})}
     _update_listings(ctx, tracked)
     # who to collect: current members, plus anyone who left the index or was delisted in the last month (their
@@ -75,6 +83,95 @@ def update_universe(ctx: Ctx) -> List[str]:
     gone = {r["symbol"] for r in rows if r["source"] == "nasdaqtrader" and r["listed"] == 0}
     recent = {r["symbol"] for r in rows if (r["member"] == 0 or r["listed"] == 0) and r["available_at"] >= cutoff}
     return sorted((current - gone) | recent)
+
+
+def _months(start: str, now: dt.datetime) -> List[str]:
+    """Every month (YYYY-MM) from start's to now's."""
+    y, m = int(start[:4]), int(start[5:7])
+    out = []
+    while (y, m) <= (now.year, now.month):
+        out.append(f"{y:04d}-{m:02d}")
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return out
+
+
+def update_membership_history(ctx: Ctx) -> int:
+    """Backfill one membership snapshot per month, oldest first, from where the last run stopped: the page's
+    revision current at 00:00 UTC on the 1st, its table read and stored with available_at = the revision's
+    timestamp (members flagged 1, earlier members missing from it flagged 0). At most wiki_history_budget
+    requests a run; a month whose revision is the previous month's costs one. A revision whose table cannot be
+    read is skipped with a warning; a source failure stops here for this run. Returns the rows stored."""
+    st = ctx.store
+    cur = st.cursor(data.HISTORY)
+    done, last_rev = cur.split("|", 1) if cur else ("", "")
+    spent = stored = 0
+    for month in _months(ctx.cfg.history_start, ctx.now):
+        if month <= done:
+            continue
+        if spent + 2 > ctx.cfg.wiki_history_budget:
+            event(ctx.log, "membership_history_paused", logging.INFO, next_month=month, requests=spent)
+            break
+        found = read(ctx.http, wikipedia_revisions, at=f"{month}-01T00:00:00Z")
+        spent += 1
+        if not found.ok:
+            ctx.warn("membership_history_failed", month=month, error=found.failures[-1][1])
+            break
+        if found.rows and str(found.rows[0]["revid"]) != last_rev:
+            rev = found.rows[0]
+            snap = read(ctx.http, wikipedia, oldid=rev["revid"], min_members=ctx.cfg.min_members)
+            spent += 1
+            if snap.ok:
+                stored += _put_snapshot(ctx, snap.rows, rev["timestamp"])
+            elif snap.failures[-1][1].startswith("schema"):
+                ctx.warn("membership_snapshot_skipped", month=month, revid=rev["revid"], error=snap.failures[-1][1])
+            else:
+                ctx.warn("membership_history_failed", month=month, error=snap.failures[-1][1])
+                break
+            last_rev = str(rev["revid"])
+        done = month
+        st.set_cursor(data.HISTORY, f"{done}|{last_rev}", ctx.run_id, ctx.at)
+    ctx.count("membership_rows", stored)
+    return stored
+
+
+def _put_snapshot(ctx: Ctx, rows: Sequence[Dict[str, Any]], stamp: str) -> int:
+    """Store one snapshot as the newest version of each symbol's history row, stamped `stamp`."""
+    keep = ("symbol", "name", "cik", "sector", "exchange", "added")
+    before = {r["symbol"]: r for r in ctx.store.asof("universe", where={"source": data.HISTORY})}
+    seen: Set[str] = set()
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        if r["symbol"] not in seen:
+            seen.add(r["symbol"])
+            out.append({**r, "source": data.HISTORY, "exchange": None, "member": 1, "listed": None})
+    out += [
+        {**{k: r[k] for k in keep}, "source": data.HISTORY, "member": 0, "listed": None}
+        for s, r in before.items()
+        if s not in seen and r["member"]
+    ]
+    return ctx.store.put("universe", out, ctx.run_id, stamp)
+
+
+def backfill_leavers(ctx: Ctx, collecting: Sequence[str]) -> int:
+    """Read the whole price history of past members that left the index (so the backtest has them on the days
+    they were members): those not collected daily, with no prices yet and not tried before, at most
+    leaver_budget a run. Each is tried once; a ticker the sources no longer know is noted, not warned about.
+    Returns how many were read."""
+    if ctx.cfg.symbols:
+        return 0
+    st = ctx.store
+    have = {r["symbol"] for r in st.query("SELECT DISTINCT symbol FROM prices")}
+    tried = {r["name"].split(":", 1)[1] for r in st.asof("cursors") if r["name"].startswith("leaver:")}
+    skip = have | tried | set(collecting)
+    todo = [s for s in data.universe(st) if s not in skip][: ctx.cfg.leaver_budget]
+    end = markets.last_closed_session(ctx.now)
+    got = 0
+    for sym in todo:
+        res = update_symbol(ctx, sym, end, full=True, quiet=True)
+        st.set_cursor(f"leaver:{sym}", res, ctx.run_id, ctx.at)
+        got += res != "failed"
+    ctx.count("leavers_read", got)
+    return got
 
 
 def _update_listings(ctx: Ctx, tracked: Set[str]) -> None:
@@ -128,28 +225,35 @@ def _start(ctx: Ctx, sym: str, end: dt.date) -> Optional[dt.date]:
     return d
 
 
-def update_symbol(ctx: Ctx, sym: str, end: dt.date, full: bool = False) -> str:
-    """One symbol's new bars (all of them since history_start when full, as after a split)."""
+def update_symbol(ctx: Ctx, sym: str, end: dt.date, full: bool = False, quiet: bool = False) -> str:
+    """One symbol's new bars (all of them since history_start when full, as after a split). quiet: a failure
+    or a fallback is logged, not warned about (a past member's ticker the sources may no longer know).
+
+    A backfilled bar dated before a split on record is stamped with the read time, not its nominal close time:
+    the source has rescaled it (see store.available)."""
     start = dt.date.fromisoformat(ctx.cfg.history_start) if full else _start(ctx, sym, end)
     if start is None:
         return "current"
     kw = {"symbol": sym, "start": start, "end": end}
     res = first_ok(ctx.http, [(yahoo, kw), (cboe, kw)], ctx.log, what=f"prices {sym}")
     if not res.ok:
-        ctx.warn("prices_failed", symbol=sym, errors=res.failures)
+        if quiet:
+            event(ctx.log, "prices_unavailable", logging.INFO, symbol=sym, errors=res.failures)
+        else:
+            ctx.warn("prices_failed", symbol=sym, errors=res.failures)
         return "failed"
-    if res.degraded:
+    if res.degraded and not quiet:
         ctx.warn("prices_fallback", symbol=sym, source=res.source, errors=res.failures)
     lo, hi = start.isoformat(), end.isoformat()
     bars, dupes = checks.dedupe([b for b in res.rows if lo <= b["date"] <= hi], ("symbol", "date"))
     for d in dupes:
         ctx.warn("duplicate_rows", source=res.source, key=d["subject"])
-    rows = [
-        {**b, "source": res.source, "available_at": available(_nominal(b["date"], PRICE_DELAY), ctx.now)} for b in bars
-    ]
-    ctx.count("price_rows", ctx.store.put("prices", rows, ctx.run_id, ctx.at))
     actions = [a for a in res.extra.get("actions", []) if a["date"] <= hi]
-    known = {(a["date"], a["kind"]) for a in ctx.store.asof("actions", where={"symbol": sym})}
+    stored = ctx.store.asof("actions", where={"symbol": sym})
+    last_split = _last_split(stored, actions)
+    rows = [{**b, "source": res.source, "available_at": _stamp(b["date"], last_split, ctx.now)} for b in bars]
+    ctx.count("price_rows", ctx.store.put("prices", rows, ctx.run_id, ctx.at))
+    known = {(a["date"], a["kind"]) for a in stored}
     new_splits = [a for a in actions if a["kind"] == "split" and (a["date"], "split") not in known]
     ctx.store.put(
         "actions",
@@ -165,6 +269,16 @@ def update_symbol(ctx: Ctx, sym: str, end: dt.date, full: bool = False) -> str:
         ctx.count("split_refetches")
         return update_symbol(ctx, sym, end, full=True)
     return str(res.source)
+
+
+def _last_split(*actions: Iterable[Dict[str, Any]]) -> str:
+    """The newest split date among the actions ("" if none)."""
+    return max((a["date"] for group in actions for a in group if a["kind"] == "split"), default="")
+
+
+def _stamp(day: str, last_split: str, now: dt.datetime) -> str:
+    """A bar's available_at: rescaled (read time, if backfilled) when a split on record falls after its date."""
+    return available(_nominal(day, PRICE_DELAY), now, rescaled=day < last_split)
 
 
 def rotation(symbols: Sequence[str], day: dt.date, share: int = 20) -> List[str]:
@@ -189,16 +303,17 @@ def reconcile(ctx: Ctx, symbols: Iterable[str]) -> List[Dict[str, Any]]:
         if not res.ok:
             ctx.warn("reconcile_unavailable", symbol=sym, error=res.failures[-1][1])
             continue
+        split_rows = ctx.store.asof("actions", where={"symbol": sym, "kind": "split"})
         ctx.store.put(
             "prices",
             [
-                {**b, "source": "cboe", "available_at": available(_nominal(b["date"], PRICE_DELAY), ctx.now)}
+                {**b, "source": "cboe", "available_at": _stamp(b["date"], _last_split(split_rows), ctx.now)}
                 for b in res.rows
             ],
             ctx.run_id,
             ctx.at,
         )
-        splits = [a["date"] for a in ctx.store.asof("actions", where={"symbol": sym, "kind": "split"})]
+        splits = [a["date"] for a in split_rows]
         after = max([s for s in splits if s > start.isoformat()], default=start.isoformat())
         ours = {
             r["date"]: r["close"]

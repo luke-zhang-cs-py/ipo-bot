@@ -66,6 +66,8 @@ class Settings:
     refetch_days: int = 5  # trading days re-read before the newest stored, to catch revisions
     min_members: int = 400  # fewer parsed from Wikipedia means its table changed shape
     sec_budget: int = 1500  # EDGAR requests a run may spend (the backfill takes what is left)
+    wiki_history_budget: int = 120  # Wikipedia requests a run may spend backfilling monthly membership snapshots
+    leaver_budget: int = 40  # past members (no longer in the index) whose price history a run may backfill
     ipo_pop: float = 0.20  # an IPO "pops" when its first close is 20% or more above the offer
     lock_stale_hours: float = 6.0  # a lock older than this is from a run that died
 

@@ -350,8 +350,10 @@ def test_panels_handle_missing_inputs() -> None:
         registered="2025-01-02",
         ranges=[("2025-01-10", 10, 12)],
         effective="2025-02-01",
-        shares=None,
+        shares=7e6,
         lead="Goldman Sachs",
+        # the features read the filings on file at the moment, not the latest values (a later prospectus's)
+        docs=[("2025-01-10", "F-1", {"lead": "Goldman Sachs"}), ("2025-02-03", "424B4", {"shares": 7e6})],
     )
     row = features.ipo_rows([d], pd.DataFrame(), 0.2).iloc[0]
     assert np.isnan(row["log_size"]) and np.isnan(row["heat"]) and row["top_bank"] == 1 and row["foreign"] == 1

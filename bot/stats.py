@@ -42,6 +42,13 @@ def calibration(p: np.ndarray, y: np.ndarray, bins: int = 10) -> Dict[str, Any]:
     return {"ece": float(ece), "table": table}
 
 
+def hit_rate(p: np.ndarray, y: np.ndarray) -> float:
+    """Share of rows whose side of 0.5 was right. A probability of exactly 0.5 calls neither side, so it scores
+    half a hit rather than counting as a call of "down" (as in evaluation/harness)."""
+    p, up = np.asarray(p, float), np.asarray(y, float) > 0.5
+    return float(np.mean(np.where(p == 0.5, 0.5, (p > 0.5) == up)))
+
+
 def scores(p: np.ndarray, y: np.ndarray, value: np.ndarray, actual: np.ndarray) -> Dict[str, float]:
     """Every score of one forecaster on resolved rows."""
     p, y = np.asarray(p, float), np.asarray(y, float)
@@ -50,7 +57,7 @@ def scores(p: np.ndarray, y: np.ndarray, value: np.ndarray, actual: np.ndarray) 
         "n": len(p),
         "brier": float(brier(p, y).mean()),
         "log_loss": float(log_loss(p, y).mean()),
-        "hit_rate": float(((p > 0.5) == (y > 0.5)).mean()),
+        "hit_rate": hit_rate(p, y),
         "ece": float(calibration(p, y)["ece"]),
         "mae": float(np.abs(err).mean()),
         "rmse": float(math.sqrt((err**2).mean())),

@@ -2,8 +2,10 @@
 
 Every run (idempotent: a prediction already made is not made again):
   1. score: each prediction whose event has resolved gets its outcome (a withdrawn IPO resolves as void);
-  2. predict: tomorrow's direction for every member with today's close, and each IPO that is effective but
-     not trading, by the adopted model and by each baseline, so live comparisons use the same rows;
+  2. predict: the next session's direction for every member with the last session's close (only between that
+     close, plus the price delay, and the next open: a run during a session makes no stock predictions), and
+     each IPO with an EFFECT notice that is not trading yet, by the adopted model and by each baseline, so live
+     comparisons use the same rows;
   3. watch: per period (a week of stock targets, a quarter of IPOs), the model's Brier against the best
      baseline's, and its calibration. Three periods in a row below the best baseline, or calibration error
      above calibration_drift, is a warning in the health report.
@@ -16,14 +18,17 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import pathlib
 from typing import Any, Dict, List, Optional, Sequence, Set
 
 import numpy as np
 import pandas as pd
 
-from bot import data, edgar, features, markets, models, stats
+from bot import collect, data, edgar, features, markets, models, stats
 from bot.context import Ctx
+from bot.evaluate import STOCK_TRAIN_DAYS
+from bot.log import event
 from bot.store import Store
 
 BASELINES = {"stock": ("base_rate", "random_walk"), "ipo": ("base_rate", "recent_ipos")}
@@ -70,9 +75,22 @@ def macro_rows(store: Store) -> pd.DataFrame:
 
 
 def stock_inputs(store: Store, at: Optional[str] = None) -> pd.DataFrame:
-    syms = data.members(store, at)
+    """The stock panel as known at `at`: a (date, symbol) row only where the symbol was an index member that day
+    (point-in-time membership, so stocks that joined later are not in the earlier years and leavers are kept)."""
+    syms = data.universe(store, at)
     closes = data.closes(store, at, [*syms, features.INDEX])
-    return features.stock_panel(closes, macro_rows(store), syms)
+    panel = features.stock_panel(closes, macro_rows(store), syms)
+    if panel.empty:
+        return panel
+    mask = data.membership(store, list(closes.index), at).stack()
+    keep = pd.MultiIndex.from_frame(panel[["date", "symbol"]]).isin(mask[mask].index)
+    return panel[keep].reset_index(drop=True)
+
+
+def _recent(df: pd.DataFrame) -> pd.DataFrame:
+    """The last STOCK_TRAIN_DAYS sessions of a stock panel: the window the backtest fits each model on."""
+    dates = sorted(df["date"].unique())
+    return df[df["date"] >= dates[-STOCK_TRAIN_DAYS]] if len(dates) > STOCK_TRAIN_DAYS else df
 
 
 def ipo_inputs(store: Store, cfg_pop: float, at: Optional[str] = None) -> pd.DataFrame:
@@ -89,33 +107,52 @@ def predict(ctx: Ctx) -> Dict[str, int]:
 
 
 def _ensure_model(ctx: Ctx, kind: str, df: pd.DataFrame, feats: Sequence[str]) -> Optional[models.Model]:
-    """The adopted model; on a fresh database, a first one fitted on everything known now."""
+    """The adopted model; on a fresh database, a first one fitted the way the backtest fits (stocks: the last
+    STOCK_TRAIN_DAYS sessions known now; IPOs: every resolved IPO)."""
     m = current_model(ctx.store, kind)
     if m is not None:
         return m
     try:
-        m = models.fit(kind, df, feats, ctx.now.date().isoformat())
+        m = models.fit(kind, _recent(df) if kind == "stock" else df, feats, ctx.now.date().isoformat())
     except ValueError as e:
         ctx.warn("no_model", kind=kind, reason=str(e))
         return None
-    register(ctx, m, {"note": "first model, fitted on all history at the first run"}, adopted=True)
+    note = "first model, fitted at the first run on " + (
+        f"the last {STOCK_TRAIN_DAYS} sessions" if kind == "stock" else "all resolved IPOs"
+    )
+    register(ctx, m, {"note": note}, adopted=True)
     return m
 
 
 def predict_stocks(ctx: Ctx) -> int:
+    """Predictions for the session after the last closed one, made only between that close (plus the price
+    delay) and the next open. Outside that window (a run during a session) nothing is predicted: the next
+    session would already be under way. That is noted in the log, not warned about."""
     day = markets.last_closed_session(ctx.now)
+    nxt = markets.next_trading_day(day)
+    if not markets.close_utc(day) + collect.PRICE_DELAY <= ctx.now < markets.open_utc(nxt):
+        event(
+            ctx.log,
+            "stock_predictions_skipped",
+            logging.INFO,
+            reason="market open or close not yet final",
+            day=str(day),
+        )
+        return 0
     panel = stock_inputs(ctx.store)
     if panel.empty:
         ctx.warn("no_stock_predictions", reason="no prices")
         return 0
     known = panel[panel["date"] < day.isoformat()]
     m = _ensure_model(ctx, "stock", known, features.STOCK_FEATURES)
-    today = panel[panel["date"] == day.isoformat()].reset_index(drop=True)
+    # today's members, less any known delisted (a monthly snapshot can lag a delisting by weeks)
+    current = set(data.members(ctx.store))
+    today = panel[(panel["date"] == day.isoformat()) & panel["symbol"].isin(current)].reset_index(drop=True)
     if m is None or today.empty:
         if m is not None:
             ctx.warn("no_stock_predictions", reason=f"no closes for {day}")
         return 0
-    target = markets.next_trading_day(day).isoformat()
+    target = nxt.isoformat()
     hist = panel[panel["y"].notna()]
     rate = hist.groupby("symbol")["y"].agg(["mean", "count"])
     pooled = float(hist["y"].mean()) if len(hist) else 0.5
@@ -157,7 +194,14 @@ def predict_ipos(ctx: Ctx) -> int:
     if rows_df.empty:
         return 0
     deals = {d.cik: d for d in edgar.deals_asof(ctx.store)}
-    pending = rows_df[[deals[c].status(ctx.now.date()) in ("effective", "priced") for c in rows_df["cik"]]]
+    # only deals with an EFFECT notice and no first trade: a deal known only by its final prospectus (424B4) may
+    # already be trading, since that is often filed on or after the listing day
+    pending = rows_df[
+        [
+            deals[c].effective is not None and deals[c].status(ctx.now.date()) in ("effective", "priced")
+            for c in rows_df["cik"]
+        ]
+    ]
     if pending.empty:
         return 0
     trained = rows_df[rows_df["trade_date"].notna()]
@@ -272,7 +316,7 @@ def score(ctx: Ctx) -> int:
                 rows.append(
                     {
                         "pred_id": r["pred_id"],
-                        "outcome": float(ret >= ctx.cfg.ipo_pop),
+                        "outcome": float(features.popped(ret, ctx.cfg.ipo_pop)),
                         "value": ret,
                         "resolved_at": ctx.at,
                         "run_id": ctx.run_id,
@@ -402,9 +446,13 @@ def retrain(ctx: Ctx, kind: str, holdout_days: int = 126) -> Dict[str, Any]:
     if held < need:
         return {"adopted": False, "reason": f"{held} outcomes since the current model was fitted; waiting for {need}"}
     train, hold = df[df[period] < cut], df[df[period] >= cut]
+    if kind == "stock":  # fitted on the backtest's rolling window, as the first model was
+        train, full = _recent(train), _recent(df)
+    else:
+        full = df
     try:
         cand_hold = models.fit(kind, train, feats, str(cut))
-        cand = models.fit(kind, df, feats, ctx.now.date().isoformat())
+        cand = models.fit(kind, full, feats, ctx.now.date().isoformat())
     except ValueError as e:
         return {"adopted": False, "reason": str(e)}
     y = hold["y"].to_numpy()

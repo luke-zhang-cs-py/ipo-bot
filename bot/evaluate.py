@@ -82,7 +82,9 @@ def ipo_walkforward(rows: pd.DataFrame, min_train: int = IPO_MIN_TRAIN, l2: floa
     quarters = sorted({markets.quarter_start(dt.date.fromisoformat(m)).isoformat() for m in rows["moment"]})
     out = []
     for q in quarters:
-        train = rows[rows["trade_date"].notna() & (rows["trade_date"] < q)]
+        # traded before the quarter, and predicted before it too: a deal in the quarter's test rows is never in
+        # its training rows (every test row's moment is on or after q, so every training outcome came before it)
+        train = rows[rows["trade_date"].notna() & (rows["trade_date"] < q) & (rows["moment"] < q)]
         nxt = markets.next_quarter(dt.date.fromisoformat(q)).isoformat()
         test = rows[(rows["moment"] >= q) & (rows["moment"] < nxt)]
         if len(train) < min_train or test.empty:
@@ -161,6 +163,16 @@ def report(preds: pd.DataFrame, period: str, forecasters: Sequence[str], value_t
 # ---------------------------------------------------------------------------- the leakage test
 
 
+def _perturb_macro(macro_rows: pd.DataFrame, after: dt.datetime, rng: np.random.Generator) -> pd.DataFrame:
+    """Scramble every macro value published after `after` (by available_at, not by its date: a value dated the
+    cutoff day can be published after the decision)."""
+    m = macro_rows.copy()
+    if not m.empty:
+        fut = (pd.to_datetime(m["available_at"], utc=True) > after).to_numpy()
+        m.loc[fut, "value"] = rng.permutation(m.loc[fut, "value"].to_numpy()) * rng.uniform(0.5, 2.0, int(fut.sum()))
+    return m
+
+
 def _scramble_after(
     closes: pd.DataFrame, macro_rows: pd.DataFrame, cutoff: str, rng: np.random.Generator
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -168,11 +180,7 @@ def _scramble_after(
     future = c.index > cutoff
     vals = c.loc[future].to_numpy()
     c.loc[future] = rng.permutation(vals.reshape(-1)).reshape(vals.shape) * rng.uniform(0.5, 2.0, size=vals.shape)
-    m = macro_rows.copy()
-    if not m.empty:
-        fut = m["date"] > cutoff
-        m.loc[fut, "value"] = rng.permutation(m.loc[fut, "value"].to_numpy()) * rng.uniform(0.5, 2.0, int(fut.sum()))
-    return c, m
+    return c, _perturb_macro(macro_rows, features.decision_time(dt.date.fromisoformat(cutoff)), rng)
 
 
 def _same(a: pd.DataFrame, b: pd.DataFrame, cols: Sequence[str]) -> float:
@@ -190,8 +198,9 @@ def _same(a: pd.DataFrame, b: pd.DataFrame, cols: Sequence[str]) -> float:
 def leakage_stocks(
     closes: pd.DataFrame, macro_rows: pd.DataFrame, cutoffs: Sequence[str], seed: int = 7
 ) -> Dict[str, Any]:
-    """Replace everything after each cutoff with scrambled values; the features up to the cutoff, and a model fitted
-    on what was known at the cutoff, must not change at all."""
+    """Replace every close after each cutoff, and every macro value published after its decision time (22:00
+    UTC), with scrambled values; the features up to the cutoff, and a model fitted on what was known at the
+    cutoff, must not change at all."""
     rng = np.random.default_rng(seed)
     base = features.stock_panel(closes, macro_rows)
     worst, checks = 0.0, []
@@ -215,36 +224,58 @@ def leakage_stocks(
     return {"passed": worst == 0.0, "worst_diff": worst, "checks": checks}
 
 
+def _other_bank(lead: Any) -> str:
+    return "Small Bank LLC" if lead in ipos.TOP_BANKS else ipos.TOP_BANKS[0]
+
+
+def _perturb_deal(d: ipos.Deal, cutoff: str, rng: np.random.Generator) -> ipos.Deal:
+    """A copy of the deal with every fact published after the cutoff's evening changed: ranges and documents
+    (shares, lead, offer) filed after the cutoff day, and first trades on or after it (a first close is read
+    the session after, so a listing on the cutoff day is not known that evening either). The latest-value
+    fields (shares, lead, symbol, offer) change too whenever a filing after the cutoff could have set them."""
+    e = copy.deepcopy(d)
+    if e.first_trade and e.first_trade["date"] >= cutoff:
+        e.first_trade["close"] = float(e.first_trade["close"]) * float(rng.uniform(0.2, 5.0))
+    e.ranges = [
+        r if r[0] <= cutoff else (r[0], r[1] * float(rng.uniform(0.5, 2)), r[2] * float(rng.uniform(0.5, 2)))
+        for r in e.ranges
+    ]
+    for _, _, doc in (x for x in e.docs if x[0] > cutoff):
+        if doc.get("shares"):
+            doc["shares"] = float(doc["shares"]) * float(rng.uniform(0.2, 5.0))
+        doc["lead"] = _other_bank(doc.get("lead"))
+        if doc.get("offer"):
+            doc["offer"] = float(doc["offer"]) * float(rng.uniform(0.5, 2.0))
+    if any(x[0] > cutoff for x in e.docs) or (e.priced or "") > cutoff:
+        e.shares = e.shares * float(rng.uniform(0.2, 5.0)) if e.shares else e.shares
+        e.lead, e.symbol = _other_bank(e.lead), f"{e.symbol}X"
+    if e.offer and (e.priced or "") > cutoff:
+        e.offer = e.offer * float(rng.uniform(0.5, 2.0))
+    return e
+
+
 def leakage_ipos(
     deals: Sequence[ipos.Deal], macro_rows: pd.DataFrame, cutoffs: Sequence[str], pop: float, seed: int = 7
 ) -> Dict[str, Any]:
-    """Scramble every IPO fact dated after each cutoff (later deals' ranges, first trades after the cutoff); the
-    features of deals predicted by the cutoff must not change."""
+    """Change every IPO fact published after each cutoff's prediction time (the close plus FILING_DELAY on the
+    cutoff day): later ranges and documents (including the final prospectus's shares, lead and offer), first
+    trades on or after the cutoff day, and macro values by available_at. The features of deals predicted by the
+    cutoff must not change. Every row's prediction moment must also come before its first trade."""
     rng = np.random.default_rng(seed)
     base = features.ipo_rows(deals, macro_rows, pop)
-    worst, checks = 0.0, []
+    traded = base[base["trade_date"].notna()]
+    late = int((traded["moment"] >= traded["trade_date"]).sum())
+    worst, checks = (float("inf") if late else 0.0), []
     for c in cutoffs:
-        alt_deals = []
-        for d in deals:
-            e = copy.deepcopy(d)
-            if e.first_trade and e.first_trade["date"] > c:
-                e.first_trade["close"] = float(e.first_trade["close"]) * float(rng.uniform(0.2, 5.0))
-            e.ranges = [
-                r if r[0] <= c else (r[0], r[1] * float(rng.uniform(0.5, 2)), r[2] * float(rng.uniform(0.5, 2)))
-                for r in e.ranges
-            ]
-            alt_deals.append(e)
-        sm = macro_rows.copy()
-        if not sm.empty:
-            fut = sm["date"] > c
-            sm.loc[fut, "value"] = sm.loc[fut, "value"].to_numpy() * rng.uniform(0.5, 2.0, int(fut.sum()))
-        alt = features.ipo_rows(alt_deals, sm, pop)
+        alt_deals = [_perturb_deal(d, c, rng) for d in deals]
+        when = markets.close_utc(dt.date.fromisoformat(c)) + markets.FILING_DELAY
+        alt = features.ipo_rows(alt_deals, _perturb_macro(macro_rows, when, rng), pop)
         a = base[base["moment"] <= c].reset_index(drop=True)
         b = alt[alt["moment"] <= c].reset_index(drop=True)
         diff = _same(a, b, features.IPO_FEATURES)
         checks.append({"cutoff": c, "feature_diff": diff, "deals": len(a)})
         worst = max(worst, diff)
-    return {"passed": worst == 0.0, "worst_diff": worst, "checks": checks}
+    return {"passed": worst == 0.0, "worst_diff": worst, "checks": checks, "moment_not_before_trade": late}
 
 
 def to_json(obj: Any) -> str:
