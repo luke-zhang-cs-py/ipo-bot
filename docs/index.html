@@ -81,7 +81,7 @@ a { color: var(--accent); }
     <tr><td>Multiple testing: 36 algorithm, universe and horizon tests, permutation p-values, false-discovery rate 10%</td><td>4 pass a naive 5% bar; <b>0</b> survive the correction</td></tr>
     <tr><td>Holdout: picked on 2009 to 2017, checked from 2018</td><td><b>1</b> of 5 held up</td></tr>
     <tr><td>Calibration of 12-month 80% ranges</td><td>held the outcome only <b>70.0% to 77.4%</b> of the time</td></tr>
-    <tr><td>Keyless bot, next-day direction of S&amp;P 500 members, walk-forward 2017 to 2026 (1,196,771 predictions)</td><td>Brier <b>0.2503</b> against <b>0.2496</b> for each stock's base rate: no edge (DM p = 0.19 after Holm)</td></tr>
+    <tr><td>Keyless bot, next-day direction of S&amp;P 500 members, walk-forward 2017 to 2026 (1,196,771 predictions)</td><td>Brier <b>0.2497</b> against <b>0.2496</b> for each stock's base rate once calibrated: no edge (DM p = 0.79)</td></tr>
     <tr><td>Trading costs, top third rebalanced monthly</td><td>a reversal signal ends up <b>8.4</b> points a year behind simply holding everything, at 50 basis points a trade</td></tr>
   </table></div>
   <p>So simple price signals do not give a 12-month edge that holds up, and ranges drawn from history are too narrow. Both findings
@@ -91,7 +91,7 @@ a { color: var(--accent); }
 <pre>pip install -r requirements.txt
 python src/ipo_bot.py "Rate the &lt;company&gt; IPO"      # needs ANTHROPIC_API_KEY
 python -m bot update                                 # the keyless bot: no keys
-python -m pytest -q tests                            # 612 offline tests, free</pre>
+python -m pytest -q tests                            # 688 offline tests, free</pre>
 
   <h2>Limits</h2>
   <ul>
