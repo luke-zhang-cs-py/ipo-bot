@@ -1,6 +1,6 @@
 # Bot health
 
-Run `20261009T094952Z-edgar-b19257` at 2026-10-09T09:49:52Z, data through the 2026-10-08 session. **Status: degraded.**
+Run `20261009T174518Z-edgar-d5995b` at 2026-10-09T17:45:18Z, data through the 2026-10-08 session. **Status: degraded.**
 
 ## Coverage
 
@@ -31,3 +31,4 @@ Run `20261009T094952Z-edgar-b19257` at 2026-10-09T09:49:52Z, data through the 20
 
 - stock: no resolved predictions yet
 - ipo: no resolved predictions yet
+- stock model stock-2026-10-09-bc9b4b29c3, shrinkage 1
