@@ -1,31 +1,24 @@
 # Bot health
 
-Run `20261009T005117Z-edgar-763afb` at 2026-10-09T00:51:17Z, data through the 2026-10-08 session. **Status: failing.**
+Run `20261009T015119Z-daily-afc92d` at 2026-10-09T01:51:19Z, data through the 2026-10-08 session. **Status: degraded.**
 
 ## Coverage
 
-- Universe: 0 symbols; 0 with prices; 0 current.
+- Universe: 503 symbols; 503 with prices; 503 current.
 - Missing tickers (no prices at all): none
-- Stale: SPX, UST10Y, UST2Y, UST3M, VIX
-- Missing trading days inside histories: 0 days over 0 symbols
+- Stale: none
+- Missing trading days inside histories: 1 days over 1 symbols
 - Missing fields in the last year of bars: none
-- Delisted symbols kept: 0; membership history recorded from not yet (earlier backtests use the membership seen then).
+- Delisted symbols kept: 0; membership history recorded from 2026-10-09T01:51:19Z (earlier backtests use the membership seen then).
 
 ## Checks
 
-- staleness: 5
-
-Errors (first 20):
-
-- staleness SPX: no prices at all
-- staleness UST3M: newest value None, behind 2026-10-08
-- staleness UST2Y: newest value None, behind 2026-10-08
-- staleness UST10Y: newest value None, behind 2026-10-08
-- staleness VIX: newest value None, behind 2026-10-08
+- missing_days: 1
+- moves: 12
 
 ## Sources this run
 
-- edgar_skipped: reason=SEC_USER_AGENT is not set; EDGAR asks every caller for "Name email"
+- every source answered
 
 ## IPO pipeline
 
