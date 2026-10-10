@@ -28,6 +28,9 @@ jobs:
           --cov=src --cov=evaluation --cov=testkit --cov-branch --cov-report=term-missing --cov-fail-under=100
         env:
           HARNESS_SETUP: demo
+          NODE_V8_COVERAGE: ${{ runner.temp }}/v8-coverage     # the Node tests' raw coverage, read by the next step
+      # the browser demo's JavaScript, from that same run: under 95% lines, functions or branches fails the job
+      - run: python scripts/js_coverage.py "${{ runner.temp }}/v8-coverage" --fail-under 95
 
   bot:
     # The keyless bot: lint, types, and every test offline with no keys and no network. Coverage under 100%

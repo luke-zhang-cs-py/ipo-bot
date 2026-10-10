@@ -82,7 +82,7 @@ def test_sizing_refuses_a_stop_at_or_above_the_entry():
 @pytest.mark.parametrize("bad, word", [
     ({"cash": -1}, "cash"), ({"cash": "lots"}, "cash"),
     ({"holdings": [{"symbol": "A", "shares": 1}, {"symbol": "a", "shares": 2}]}, "twice"),
-    ({"holdings": [{"shares": 1}]}, "symbol"),
+    ({"holdings": [{"shares": 1}]}, "symbol"), ({"holdings": [{"symbol": None, "shares": 1}]}, "symbol"),   # not a stock named NONE
     ({"holdings": [{"symbol": "A", "shares": 1, "price": 0}]}, "price"),
     ({"rules": {"max_position_pct": 150}}, "at most 100"),
 ])

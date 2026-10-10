@@ -89,7 +89,7 @@ def validate(raw):
     rules["conviction_scale"] = {str(k): _num(v, f"conviction_scale.{k}") for k, v in scale.items()}
     holdings, seen = [], set()
     for i, h in enumerate(raw.get("holdings") or []):
-        if not isinstance(h, dict) or not str(h.get("symbol", "")).strip():
+        if not isinstance(h, dict) or not str(h.get("symbol") or "").strip():   # null is no symbol, not "None"
             raise PortfolioError(f"holding {i + 1} needs a symbol")
         sym = str(h["symbol"]).strip().upper()
         if sym in seen:

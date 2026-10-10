@@ -35,7 +35,7 @@ process.stdin.on('data', (d) => input += d).on('end', () => {
     try { return core.sizePosition(core.valued(core.validate(pf)), ...args); } catch (e) { return { error: e.message }; }
   });
   out.views = job.views.map((pf) => { const v = core.valued(core.validate(pf)); return { equity: v.equity, breaches: v.rule_breaches }; });
-  out.memos = job.memos.map((m) => core.checkMemo(m).map(([name, ok]) => [name, ok]));
+  out.memos = job.memos.map((m) => core.checkMemo(m));
   process.stdout.write(JSON.stringify(out));
 });
 """
@@ -63,6 +63,12 @@ SIZES = [
     (EXAMPLE, ["BBB", 55, 44, "Medium", None]), ({**EXAMPLE, "cash": 0}, ["ZZZ", 12.5, 10, "High", "Health"]),
     (EXAMPLE, ["DDD", 50, 45, "toString", None]), (EXAMPLE, ["DDD", 50, 45, "Medium", "constructor"]),
     ({**EXAMPLE, "holdings": EXAMPLE["holdings"] + [{"symbol": "UNP", "shares": 5, "sector": "Energy"}]}, ["unp", 50, 45, "Medium", None]),
+    (EXAMPLE, ["NEWCO", 20, 18, "Medium", None]),                 # not held, no sector: no sector limit
+    ({"cash": 0}, ["NEWCO", 20, 18, "Medium", "Energy"]),          # an empty portfolio: nothing to risk, 0% after
+    (EXAMPLE, [None, 20, 18, "Medium", None]),                    # str(None), as the Python names it
+    (EXAMPLE, ["DDD", 50, 50, "Medium", None]), (EXAMPLE, ["DDD", 0, -1, "Medium", None]),
+    (EXAMPLE, ["DDD", "50", 45, "Medium", None]), (EXAMPLE, ["DDD", 50, -1, "Medium", None]),
+    ({**EXAMPLE, "rules": {**EXAMPLE["rules"], "conviction_scale": {"b": 1, "a": 2}}}, ["DDD", 50, 45, "Medium", None]),
 ]
 
 
@@ -79,7 +85,22 @@ GUARD_CASES = [
     ({**EXAMPLE, "equity_high": 20_000, "rules": {**EXAMPLE["rules"], "max_drawdown_pct": 8}}, ["DDD", 50, 45, "Medium", "Energy"], {}),
     ({**EXAMPLE, "rules": {**EXAMPLE["rules"], "max_drawdown_pct": 8}}, ["DDD", 50, 45, "Medium", "Energy"], {}),
     ({**EXAMPLE, "halted": True}, ["DDD", 50, 45, "Medium", "Energy"], {}),
+    ({**GUARDED, "day_pnl": 0}, ["DDD", 50, 45, "Medium", "Energy"], {"avg_volume": 900_000}),          # no loss today
 ]
+NOW = "2026-10-07T12:00:00Z"
+# Earnings 47 hours away, inside the 48-hour blackout, in each form fromisoformat reads (a time with no zone is UTC, so
+# "2026-10-09 11:00" must not be read in the machine's own zone); then forms it refuses, and no "now" at all.
+WHEN = ["2026-10-09T11:00:00", "2026-10-09 11:00", "2026-10-09x11:00", "20261009T1100", "2026-10-09T110000",
+        "2026-10-09T16:30:00.5+05:30", "2026-10-09T16:30+0530", "2026-10-09T06:59-04", "2026-10-09T11:00:00,25Z",
+        "2026-10-09T12:00Z", "2026-10-10", "2026-10-09",
+        "Oct 9 2026", "2026-02-30", "0", "", "2026-10-09T25:00", "2026-10-09T11:60", "2026-10-09T11:00:00+25:00",
+        "2026-1009", "2026-10-09T11:0000", "0000-10-09", "2026-10-09T11:00 ", "2026-10-09T11:00:00z"]
+GUARD_CASES += [(GUARDED, ["DDD", 50, 45, "Medium", "Energy"], {"next_earnings": w, "avg_volume": 900_000, "now": NOW})
+                for w in WHEN]
+GUARD_CASES += [(GUARDED, ["DDD", 50, 45, "Medium", "Energy"], {"next_earnings": w, "avg_volume": 900_000, **now})
+                for w in ("2000-01-01", "2999-01-01") for now in ({}, {"now": ""}, {"now": None})]
+GUARD_CASES += [(GUARDED, ["DDD", 50, 45, "Medium", "Energy"], {"next_earnings": NOW, "avg_volume": v, "now": NOW})
+                for v in (-1, "9", 0)]
 GUARD_DRIVER = """
 const core = require(process.argv[1]);
 let input = '';
@@ -95,9 +116,15 @@ process.stdin.on('data', (d) => input += d).on('end', () => {
 def test_the_guardrails_match_the_python():
     r = subprocess.run([NODE, "-e", GUARD_DRIVER, str(CORE)], input=json.dumps(GUARD_CASES), capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
-    for (pf, args, opts), got in zip(GUARD_CASES, json.loads(r.stdout)):
+    got_all = json.loads(r.stdout)
+    assert len(got_all) == len(GUARD_CASES)
+    for (pf, args, opts), got in zip(GUARD_CASES, got_all):
         view = portfolio.valued(portfolio.validate(copy.deepcopy(pf)))
-        want = portfolio.size_position(view, *args, **opts)
+        try:
+            want = portfolio.size_position(view, *args, **opts)
+        except portfolio.PortfolioError as e:
+            assert got == {"error": str(e)}, (opts, got)
+            continue
         for key in ("shares", "binding_rule", "limits_in_shares", "warnings"):
             assert got[key] == want[key], (opts, key, got[key], want[key])
 
@@ -205,6 +232,34 @@ def broken_blocks():
     yield edit(lambda k: (k["inputs"].update(__proto__=proto), k["outputs"]["multiples"][0].update(denominator="__proto__")))
     yield edit(lambda k: (k["inputs"].update(__proto__=proto), k["outputs"]["multiples"][0].update(numerator="__proto__", denominator="revenue")))
     yield edit(lambda k: k["outputs"]["multiples"][0].update(name={"__proto__": 1, "a": 2}))
+    # a price with no basis is a last close, so it can be stale; an offer midpoint cannot
+    yield edit(lambda k: (k["inputs"]["price"].pop("basis"), k["inputs"]["price"].update(as_of="2026-10-01")))
+    yield edit(lambda k: k["inputs"]["price"].update(basis="offer midpoint", as_of="2026-10-01"))
+    # empty or lone-value inputs, outputs and subject: an empty one is {}, and the detail names the type as Python does
+    for bad in (None, 0, "", 5, 5.0, 2.5, True, "x", [1]):
+        yield edit(lambda k, bad=bad: k.update(inputs=bad, outputs=bad, subject=bad))
+    yield edit(lambda k: k["inputs"].update(preferred={"value": 100_000_000, "source": "S-1", "as_of": "2026-06-30"}))
+    yield edit(lambda k: k["outputs"].update(enterprise_value=5_600_000_000))
+    # revenue growth: 450% must be flagged; a prior year of 0 or below cannot be compared
+    prior = {"source": "S-1", "as_of": "2025-06-30", "period": "LTM to 2025-06-30"}
+    for v, flags in ((200_000_000, []), (200_000_000, ["outlier"]), (1_000_000_000, []), (0, []), (-5, [])):
+        yield edit(lambda k, v=v, flags=flags: (k["inputs"].update(revenue_prior={**prior, "value": v}), k.update(flags=flags)))
+    # an expected loss: no Overweight, whatever the conviction
+    yield edit(lambda k: k["scenarios"].update(reference_price=70, expected_return_pct=-11.43))
+    yield edit(lambda k: (k["scenarios"].update(reference_price=70, expected_return_pct=-11.43), k.update(rating="Underweight")))
+    # a rating or conviction that is an object is printed in the detail as str() prints it, not a crash
+    for bad in ({}, {"a": 1}, [{"b": 2}]):
+        yield edit(lambda k, bad=bad: k.update(conviction=bad))
+        yield edit(lambda k, bad=bad: k.update(rating=bad))
+    # float() reads inf, infinity and nan in any case and with spaces, and digits grouped by single underscores
+    for bad in ("inf", "-Infinity", "nan", " NaN ", "+inf", "1_000", "1__0", "_1"):
+        yield edit(lambda k, bad=bad: k["scenarios"]["bull"].update(value=bad))
+    # str() of numbers with no tag to go by (a date field): a huge integer, -0.0, a float
+    for bad in (10**21, -(10**22), -0.0, 0.0, 2026.5):
+        yield edit(lambda k, bad=bad: k.update(as_of=bad))
+    # the multiple's name escaped as repr() escapes it: \r, non-printing characters past U+FFFF, 0.0
+    for name in (["a\rb"], ["\U000e0001"], ["\U000f0000"], ["\U0001f600"], [0.0], ["\x7f", "\x85", "\u2028"]):
+        yield edit(lambda k, name=name: k["outputs"]["multiples"][0].update(name=name))
 
 
 # JSON written the way json.dumps never writes it, in place of the multiple's name: the browser must read it as json.loads does
@@ -224,10 +279,11 @@ def raw_memos():
 
 def test_sizing_matches_the_python_to_the_cent():
     js = run_js({"sizes": SIZES, "views": [], "memos": []})["sizes"]
+    assert len(js) == len(SIZES)
     for (pf, args), got in zip(SIZES, js):
         want = py_size(pf, args)
         if "error" in want:
-            assert "error" in got, (args, got)
+            assert got == want, (args, got)                 # the same refusal, word for word
             continue
         for key in ("shares", "binding_rule", "limits_in_shares"):
             assert got[key] == want[key], (args, key, got[key], want[key])
@@ -244,16 +300,86 @@ def test_portfolio_values_and_breaches_match():
         assert got["breaches"] == v["rule_breaches"]
 
 
+# Portfolio files as a person might mistype them: each is refused with the Python's own words, or read to the same view.
+VALIDATE = """
+const core = require(process.argv[1]);
+let input = '';
+process.stdin.on('data', (d) => input += d).on('end', () => {
+  const out = JSON.parse(input).map((pf) => { try { return core.valued(core.validate(pf)); } catch (e) { return { error: e.message }; } });
+  process.stdout.write(JSON.stringify(out));
+});
+"""
+ONE = {"symbol": "AAA", "shares": 2, "price": 10}
+PORTFOLIOS = [
+    EXAMPLE, [], None, "portfolio", {}, {"cash": 0}, {"cash": 0, "holdings": [{**ONE, "shares": 0}]},
+    {**EXAMPLE, "cash": 0}, {**EXAMPLE, "cash": None}, {**EXAMPLE, "cash": -5}, {**EXAMPLE, "cash": "lots"},
+    {**EXAMPLE, "rules": None}, {**EXAMPLE, "rules": {"max_position_pct": 150}}, {**EXAMPLE, "rules": {"max_position_pct": "10"}},
+    {**EXAMPLE, "rules": {"max_position_pct": True}}, {**EXAMPLE, "rules": {"min_cash_pct": -1}},
+    {**EXAMPLE, "rules": {"max_order_value": 2e12}}, {**EXAMPLE, "rules": {"earnings_blackout_hours": 721}},
+    {**EXAMPLE, "rules": {"max_volume_pct": 101}}, {**EXAMPLE, "rules": {"max_daily_loss_pct": None, "conviction_scale": None}},
+    {**EXAMPLE, "rules": {"conviction_scale": {"Low": -1}}},
+    {**EXAMPLE, "halted": "yes"}, {**EXAMPLE, "halted": None}, {**EXAMPLE, "halted": False},
+    {**EXAMPLE, "day_pnl": "x"}, {**EXAMPLE, "day_pnl": None}, {**EXAMPLE, "day_pnl": False}, {**EXAMPLE, "day_pnl": -250.5},
+    {**EXAMPLE, "equity_high": -1}, {**EXAMPLE, "equity_high": None}, {**EXAMPLE, "equity_high": 12_000},
+    {"holdings": [{"shares": 1}]}, {"holdings": [{"symbol": None}]}, {"holdings": [{"symbol": "  "}]}, {"holdings": [{"symbol": 0}]},
+    {"holdings": ["AAA"]}, {"holdings": [None]}, {"holdings": [["AAA"]]}, {"holdings": [{"symbol": "aaa"}, {"symbol": " AAA "}]},
+    {"holdings": [{**ONE, "price": 0}]}, {"holdings": [{**ONE, "shares": None}]}, {"holdings": [{**ONE, "shares": -1}]},
+    {"holdings": [{**ONE, "cost_basis": "100"}]}, {"holdings": [{**ONE, "price": "10"}]},
+    {"cash": 100, "holdings": [ONE]},                                                  # no sector, date or as_of: Unknown, undated
+    {"as_of": "2026-10-06", "cash": 100, "holdings": [{**ONE, "cost_basis": 0, "sector": ""}]},   # the date from as_of; no gain on 0
+    {"cash": 100, "holdings": [{**ONE, "symbol": 7, "sector": [], "price_date": ["2026-10-06"]}]},   # str() of odd values
+    {"cash": 100, "as_of": 20261006, "holdings": [{**ONE, "symbol": True, "sector": {"a": 1}, "price_date": 0}]},
+    {"cash": 100, "holdings": [{"symbol": "AAA", "shares": 1}, {**ONE, "symbol": "BBB", "cost_basis": 8}]},   # one unpriced
+    {"cash": 10, "holdings": [{**ONE, "sector": "Energy"}, {**ONE, "symbol": "BBB", "sector": "Energy"}]},     # every rule breached
+]
+
+
+def same(a, b, path="view"):
+    """Equal, with floats compared to 1e-9 (the JS cannot tell 1.0 from 1)."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        assert sorted(a) == sorted(b), (path, sorted(a), sorted(b))
+        for k in a:
+            same(a[k], b[k], f"{path}.{k}")
+    elif isinstance(a, list) and isinstance(b, list):
+        assert len(a) == len(b), path
+        for i, (x, y) in enumerate(zip(a, b)):
+            same(x, y, f"{path}[{i}]")
+    elif isinstance(a, (int, float)) and not isinstance(a, bool) and isinstance(b, (int, float)) and not isinstance(b, bool):
+        assert abs(a - b) <= 1e-9 * max(1, abs(a), abs(b)), (path, a, b)
+    else:
+        assert a == b, (path, a, b)
+
+
+def test_a_portfolio_file_is_read_or_refused_as_the_python_does():
+    r = subprocess.run([NODE, "-e", VALIDATE, str(CORE)], input=json.dumps(PORTFOLIOS), capture_output=True, text=True,
+                       encoding="utf-8", timeout=60)
+    assert r.returncode == 0, r.stderr
+    got_all = json.loads(r.stdout)
+    assert len(got_all) == len(PORTFOLIOS)
+    for pf, got in zip(PORTFOLIOS, got_all):
+        try:
+            want = portfolio.valued(portfolio.validate(copy.deepcopy(pf)))
+        except portfolio.PortfolioError as e:
+            want = {"error": str(e)}
+        same(got, want, json.dumps(pf)[:80])
+
+
 def all_memos():
     return [memo_with(b) for b in broken_blocks()] + raw_memos() + ["no block here", "```json\n{oops\n```",
+            '```json\n{"key_numbers": "open```', '```json\n{"key_numbers": {}} x\n```', '```json\n{"key_numbers": {}}\n```',
             memo_with(BLOCK) + "\n```json\n{oops\n```"]           # a stray invalid snippet does not hide the real block
+
+
+TYPED = {"inputs is an object", "outputs is an object", "subject is an object"}    # their detail is the type's name
 
 
 def assert_memos_match(memos, js):
     assert len(js) == len(memos)
-    for memo, got in zip(memos, js):
-        want = [[name, ok] for name, ok, _ in verify.check_memo(memo)]
+    for memo, got_full in zip(memos, js):
+        py = verify.check_memo(memo)
+        got, want = [[name, ok] for name, ok, _ in got_full], [[name, ok] for name, ok, _ in py]
         assert got == want, (memo[:80], [x for x in got if x not in want], [x for x in want if x not in got])
+        assert [d for n, _, d in got_full if n in TYPED] == [d for n, _, d in py if n in TYPED], memo[:80]
 
 
 def test_every_memo_check_matches_the_python():
@@ -362,6 +488,10 @@ IDEAS = [
     {**SCEN, "symbol": "UTIL", "sector": "Utilities", "price": 64, "stop": 56, "vol": 18, "conviction": "High",
      "bull": {"value": 74, "prob": 25}, "base": {"value": 68, "prob": 55}, "bear": {"value": 58, "prob": 20}},
     {**SCEN, "symbol": "NOSTOP", "stop": None},
+    {**SCEN, "symbol": "ODD", "conviction": "Certain"},                      # a conviction the rules have no scale for
+    {c: v for c, v in SCEN.items() if c != "conviction"},                    # no symbol, sector or conviction
+    {**SCEN, "symbol": "AAA", "sector": "Technology", "price": 180, "stop": 170,   # held already
+     "bull": {"value": 260, "prob": 30}, "base": {"value": 210, "prob": 50}, "bear": {"value": 150, "prob": 20}},
 ]
 
 
@@ -384,6 +514,13 @@ def test_each_trade_option_is_projected_and_sized_by_the_same_rules():
         assert abs(r["reward_risk"] - (pwv - idea["price"]) / (idea["price"] - idea["stop"])) < 1e-9
         assert r["rating"] == verify.expected_rating(100 * (pwv / idea["price"] - 1), idea["conviction"])
     assert rows["NOSTOP"]["reward_risk"] is None and rows["NOSTOP"]["shares"] is None and rows["NOSTOP"]["p_touch_stop"] is None
+    # a conviction with no scale cannot be sized, but is still projected
+    assert rows["ODD"]["shares"] is None and rows["ODD"]["loss_at_stop"] is None and rows["ODD"]["p_touch_stop"] is not None
+    # no symbol is "NEW", sized at Medium conviction with no sector; a held stock is sized against what is held
+    assert rows["NEW"]["rating"] == rows["EXM"]["rating"]
+    for sym, args in (("NEW", ("NEW", 50, 40, "Medium", None)), ("AAA", ("AAA", 180, 170, "Medium", "Technology"))):
+        want = portfolio.size_position(copy.deepcopy(view), *args)
+        assert rows[sym]["shares"] == want["shares"] and abs(rows[sym]["loss_at_stop"] - want["loss_at_stop"]) <= 0.011
 
 
 def test_trade_options_sort_best_first_with_blanks_last():
@@ -394,7 +531,7 @@ def test_trade_options_sort_best_first_with_blanks_last():
         for dir in ("best", "worst"):
             order = out["sorts"][f"{key}:{dir}"]
             have = [s for s in order if rows[s][key] is not None]
-            assert order[len(have):] == [s for s in order if rows[s][key] is None]          # blanks always last
+            assert order[len(have):] == sorted(s for s in order if rows[s][key] is None)    # blanks last, by symbol
             values = [rows[s][key] for s in have]
             high_first = (best == "high") == (dir == "best")
             assert values == sorted(values, reverse=high_first), (key, dir, order)
@@ -403,3 +540,69 @@ def test_trade_options_sort_best_first_with_blanks_last():
     by_rating = out["sorts"]["rating:best"]
     assert [rank[rows[s]["rating"]] for s in by_rating] == sorted((rank[rows[s]["rating"]] for s in by_rating), reverse=True)
     assert "unknown sort" in out["bad"]
+
+
+# ----------------------------------------------------------------------------- the page's own use (JS only)
+BROWSER = """
+const vm = require('vm'), fs = require('fs'), file = process.argv[1], node = require(file);
+const window = {};                                 // a page: no module, a global "self" the script hangs IpoCore on
+vm.runInNewContext(fs.readFileSync(file, 'utf8'), { self: window }, { filename: file });
+const page = window.IpoCore;
+process.stdout.write(JSON.stringify({ page: Object.keys(page), node: Object.keys(node), rating: page.expectedRating(20, 'High'),
+  memo: page.checkMemo('no block here')[0][1], thresholds: page.THRESHOLDS }));
+"""
+
+
+def test_the_page_gets_the_same_engine_as_node():
+    r = subprocess.run([NODE, "-e", BROWSER, str(CORE)], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["page"] == out["node"] and "checkMemo" in out["page"] and "sizePosition" in out["page"]
+    assert out["rating"] == verify.expected_rating(20, "High") and out["memo"] is False
+    assert out["thresholds"]["overweight"] == verify.OVERWEIGHT
+
+
+# An unforeseen error inside the checks (forced here by breaking Math.abs) must come back as one failed check, so the
+# page shows it instead of freezing; the KEY NUMBERS block itself was read.
+FAULT = """
+const core = require(process.argv[1]);
+let input = '';
+process.stdin.on('data', (d) => input += d).on('end', () => {
+  Math.abs = () => { throw new Error('boom'); };
+  process.stdout.write(JSON.stringify(core.checkMemo(input)));
+});
+"""
+
+
+def test_an_error_inside_the_checks_is_a_failed_check_not_a_crash():
+    r = subprocess.run([NODE, "-e", FAULT, str(CORE)], input=memo_with(BLOCK), capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == [["KEY NUMBERS block present and valid", True, ""], ["the block's shape can be checked", False, "boom"]]
+
+
+def test_the_projection_defaults_and_a_certain_path():
+    bare = {c: v for c, v in SCEN.items() if c not in ("months", "vol", "conviction")}
+    certain = {**SCEN, "vol": 0, "bull": {"value": 80, "prob": 0}, "base": {"value": 62, "prob": 100}, "bear": {"value": 35, "prob": 0}}
+    low = {**SCEN, "conviction": "Low"}
+    a, b, c, d = run_project({"ratings": [], "runs": [bare, SCEN, certain, low]})["runs"]
+    assert a == b                                          # 12 months, 35% volatility and Medium conviction by default
+    assert (a["months"], a["vol"], len(a["t"])) == (12, 35, 49)
+    # no volatility and one sure case: every path is that case's own line, so every band is it and the stop is never touched
+    for band in c["bands"].values():
+        assert all(abs(x - y) < 1e-9 * y for x, y in zip(band, c["scenario"]["base"]))
+    assert c["picks"] == {"bull": 0, "base": 2000, "bear": 0} and abs(c["pwv"] - 62) < 1e-9
+    assert c["p_touch_stop"] == 0 and c["p_end_below_stop"] == 0 and c["p_end_above_price"] == 1
+    assert sum(c["histogram"]["counts"]) == 2000 and abs(c["histogram"]["lo"] - 62) < 1e-9 and c["histogram"]["width"] > 0
+    assert a["rating"] == "Overweight" and d["rating"] == verify.expected_rating(d["expected_return_pct"], "Low") == "Equal-weight"
+
+
+def test_a_projection_with_impossible_inputs_is_refused():
+    bad = [{**SCEN, "bull": None}, {**SCEN, "bull": {"value": 0, "prob": 30}}, {**SCEN, "bear": {"value": 35, "prob": -5}},
+           {**SCEN, "base": {"value": 62}}, {**SCEN, "vol": 250}, {**SCEN, "vol": -1}, {**SCEN, "months": 1.5}, {**SCEN, "months": 37},
+           {**SCEN, "price": None}]
+    runs = run_project({"ratings": [], "runs": bad})["runs"]
+    assert [r.get("error") for r in runs] == [
+        "bull needs a value above 0 and a probability", "bull needs a value above 0 and a probability",
+        "bear needs a value above 0 and a probability", "base needs a value above 0 and a probability",
+        "volatility must be 0% to 200%", "volatility must be 0% to 200%", "horizon must be 1 to 36 months",
+        "horizon must be 1 to 36 months", "price must be above 0"]

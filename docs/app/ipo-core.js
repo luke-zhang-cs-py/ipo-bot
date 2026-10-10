@@ -15,7 +15,7 @@
 
   function num(v, what, minimum = 0, allowZero = true) {
     if (typeof v !== "number" || !isFinite(v)) throw new PortfolioError(what + " must be a number");
-    if (v < minimum || (!allowZero && v === 0)) throw new PortfolioError(what + " must be " + (allowZero ? "at least" : "above") + " " + minimum);
+    if (v < minimum || (!allowZero && v === 0)) throw new PortfolioError(what + " must be " + (allowZero ? "at least" : "above") + " " + pyFloatRepr(minimum));
     return v;
   }
 
@@ -29,7 +29,7 @@
     for (const [k, ceiling] of Object.entries(GUARDRAILS)) {
       if (rules[k] != null) {
         rules[k] = num(rules[k], "rules." + k);
-        if (rules[k] > ceiling) throw new PortfolioError("rules." + k + " is at most " + ceiling);
+        if (rules[k] > ceiling) throw new PortfolioError("rules." + k + " is at most " + (ceiling >= 1e6 ? ceiling.toExponential() : ceiling));   // {ceiling:g}
       }
     }
     const equityHigh = raw.equity_high == null ? null : num(raw.equity_high, "equity_high");
@@ -40,17 +40,17 @@
     const scale = {};
     for (const [k, v] of Object.entries(rules.conviction_scale || {})) scale[String(k)] = num(v, "conviction_scale." + k);
     rules.conviction_scale = scale;
-    const holdings = [], seen = new Set();
+    const holdings = [], seen = new Set(), text = (x, fallback) => truthy(x) ? pyStr(x) : fallback;   // str(x or fallback)
     (raw.holdings || []).forEach((h, i) => {
-      if (!h || typeof h !== "object" || !String(h.symbol || "").trim()) throw new PortfolioError("holding " + (i + 1) + " needs a symbol");
-      const sym = String(h.symbol).trim().toUpperCase();
+      if (!h || typeof h !== "object" || !text(h.symbol, "").trim()) throw new PortfolioError("holding " + (i + 1) + " needs a symbol");
+      const sym = text(h.symbol, "").trim().toUpperCase();
       if (seen.has(sym)) throw new PortfolioError(sym + " is listed twice");
       seen.add(sym);
       holdings.push({ symbol: sym, shares: num(h.shares === undefined ? 0 : h.shares, sym + " shares"),
-        cost_basis: h.cost_basis == null ? null : num(h.cost_basis, sym + " cost_basis"), sector: String(h.sector || "Unknown"),
-        price: h.price == null ? null : num(h.price, sym + " price", 0, false), price_date: String(h.price_date || raw.as_of || "") });
+        cost_basis: h.cost_basis == null ? null : num(h.cost_basis, sym + " cost_basis"), sector: text(h.sector, "Unknown"),
+        price: h.price == null ? null : num(h.price, sym + " price", 0, false), price_date: text(h.price_date, text(raw.as_of, "")) });
     });
-    return { as_of: String(raw.as_of || ""), cash: num(raw.cash === undefined ? 0 : raw.cash, "cash"), holdings, rules, day_pnl: dayPnl,
+    return { as_of: text(raw.as_of, ""), cash: num(raw.cash === undefined ? 0 : raw.cash, "cash"), holdings, rules, day_pnl: dayPnl,
       equity_high: equityHigh, halted };
   }
 
@@ -85,21 +85,31 @@
 
   const round2 = (x) => Math.round(x * 100) / 100;
 
-  // An ISO date or date-time in ms since the epoch; a bare date (or one with no zone) is read as UTC, as portfolio.py does.
+  // portfolio._when, in ms since the epoch: the forms datetime.fromisoformat reads (YYYY-MM-DD or YYYYMMDD, then any one
+  // character and HH[:MM[:SS[.fff]]] or HHMMSS, then Z or +HH:MM), a bare date or one with no zone read as UTC.
+  // Date.parse would also take "Oct 8 2026" or "0", roll 2026-02-30 into March, and read "2026-10-08 20:00" as local time.
+  const ISO_WHEN = /^(\d{4})(-?)(\d{2})\2(\d{2})(?:[^](\d{2})(?:(:?)(\d{2})(?:\6(\d{2})(?:[.,](\d+))?)?)?(Z|[+-]\d{2}(?::?\d{2})?)?)?$/u;
   function when(v, what) {
-    const s = String(v);
-    const t = Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(s) || !s.includes("T") ? s : s + "Z");
-    if (!isFinite(t)) throw new PortfolioError(what + " must be an ISO date or date-time");
-    return t;
+    const m = ISO_WHEN.exec(pyStr(v));
+    if (m) {
+      const [y, mo, day, h, mi, s] = [1, 3, 4, 5, 7, 8].map((g) => +(m[g] || 0)), frac = Number("0." + (m[9] || ""));
+      const z = /^([+-])(\d\d):?(\d\d)?$/.exec((m[10] || "Z").replace("Z", "+00")), oh = +z[2], om = +(z[3] || 0);
+      const d = new Date(0);
+      d.setUTCFullYear(y, mo - 1, day);
+      d.setUTCHours(h, mi, s);
+      if (y >= 1 && d.getUTCMonth() === mo - 1 && d.getUTCDate() === day && h < 24 && mi < 60 && s < 60 && oh < 24 && om < 60)
+        return d.getTime() + frac * 1000 - (z[1] === "-" ? -1 : 1) * (oh * 60 + om) * 60000;
+    }
+    throw new PortfolioError(what + " must be an ISO date or date-time");
   }
 
   function sizePosition(view, symbol, entryPrice, stopPrice, conviction = "Medium", sector = null, opts = {}) {
     const entry = num(entryPrice, "entry_price", 0, false), stop = num(stopPrice, "stop_price");
     if (stop >= entry) throw new PortfolioError("the stop-working price must be below the entry price for a purchase");
     const rules = view.rules, equity = view.equity, scale = Object.hasOwn(rules.conviction_scale, String(conviction)) ? rules.conviction_scale[String(conviction)] : undefined;
-    if (scale === undefined) throw new PortfolioError("conviction must be one of " + Object.keys(rules.conviction_scale).sort().join(", "));
-    const sym = String(symbol).trim().toUpperCase();
-    if ((view.unpriced || []).includes(sym)) throw new PortfolioError(sym + " is held but has no price: its position and sector limits cannot be checked");
+    if (scale === undefined) throw new PortfolioError("conviction must be one of " + pyRepr(Object.keys(rules.conviction_scale).sort()));
+    const sym = pyStr(symbol).trim().toUpperCase();
+    if (view.unpriced.includes(sym)) throw new PortfolioError(sym + " is held but has no price: its position and sector limits cannot be checked");
     const held = view.holdings.find((h) => h.symbol === sym) || null;
     sector = sector || (held ? held.sector : "Unknown");
     const heldValue = held ? held.value : 0, sectorValue = (Object.hasOwn(view.sector_pct, sector) ? view.sector_pct[sector] : 0) * equity / 100;
@@ -118,7 +128,7 @@
     if (rules.earnings_blackout_hours != null) {
       if (opts.next_earnings == null) warnings.push("earnings_blackout_hours is set but no earnings date was given: the blackout was not checked");
       else {
-        const hours = (when(opts.next_earnings, "next_earnings") - (opts.now != null ? when(opts.now, "now") : Date.now())) / 3.6e6;
+        const hours = (when(opts.next_earnings, "next_earnings") - (truthy(opts.now) ? when(opts.now, "now") : Date.now())) / 3.6e6;
         if (hours >= 0 && hours <= rules.earnings_blackout_hours) limits.earnings_blackout = 0;
       }
     }
@@ -128,8 +138,7 @@
     }
     if (rules.max_order_value != null) limits.order_value = Math.floor(rules.max_order_value / entry);
     if (rules.max_gross_exposure_pct != null) {
-      const invested = view.invested != null ? view.invested : view.holdings.reduce((a, h) => a + h.value, 0);
-      limits.exposure = Math.floor(Math.max(0, equity * rules.max_gross_exposure_pct / 100 - invested) / entry);
+      limits.exposure = Math.floor(Math.max(0, equity * rules.max_gross_exposure_pct / 100 - view.invested) / entry);
     }
     if (rules.max_drawdown_pct != null) {
       if (view.equity_high == null) warnings.push("max_drawdown_pct is set but equity_high is not: the drawdown was not checked");
@@ -263,9 +272,8 @@
   const asList = (x) => Array.isArray(x) ? x : x == null || x === "" || (isDict(x) && !Object.keys(x).length) ? [] : [x];
   const named = (d, name) => typeof name === "string" && Object.hasOwn(d, name) ? d[name] : null;   // verify._named
   const plainNumber = (x) => isNum(x) ? x : null;                                                   // verify._plain_number
-  function pyFloatRepr(x) {                     // Python's repr(float): shortest digits, exponent form below 1e-4 and from 1e16
-    if (x !== x) return "nan";
-    if (!isFinite(x)) return x > 0 ? "inf" : "-inf";
+  function pyFloatRepr(x) {                     // Python's repr(float): shortest digits, exponent form below 1e-4
+                                                // and from 1e16; finite only, since the parser refuses NaN and Infinity
     if (x === 0) return Object.is(x, -0) ? "-0.0" : "0.0";
     const [mant, e] = x.toExponential().split("e"), exp = +e;
     if (exp < -4 || exp >= 16) return mant + "e" + (exp < 0 ? "-" : "+") + String(Math.abs(exp)).padStart(2, "0");
@@ -300,7 +308,7 @@
   const pyField = (o, key) => pyStr(o[key], tagAt(o, key));                               // str(o.get(key))
   // [str(u) for u in verify._as_list(o.get(key))]
   const pyStrList = (o, key) => Array.isArray(o[key]) ? o[key].map((u, i) => pyStr(u, tagAt(o[key], i))) : asList(o[key]).map((u) => pyStr(u, tagAt(o, key)));
-  const pyType = (x) => Array.isArray(x) ? "list" : typeof x === "string" ? "str" : typeof x === "number" ? (Number.isInteger(x) ? "int" : "float") : typeof x === "boolean" ? "bool" : "dict";
+  const pyType = (x, tag) => Array.isArray(x) ? "list" : typeof x === "string" ? "str" : typeof x === "number" ? (tag === "f" ? "float" : "int") : typeof x === "boolean" ? "bool" : "dict";
   const DIGITS = "\\d(?:_?\\d)*", FLOAT = new RegExp("^[+-]?(?:" + DIGITS + "(?:\\.(?:" + DIGITS + ")?)?|\\." + DIGITS + ")(?:[eE][+-]?" + DIGITS + ")?$");
   function pyFloat(x) {                         // Python's float(): a number or a numeric string; null, "", lists and objects raise
     if (typeof x === "number") return x;
@@ -326,13 +334,13 @@
   function check(k) {
     const out = [], add = (name, ok, detail = "") => out.push([name, !!ok, detail]);
     const rawIn = truthy(k.inputs) ? k.inputs : {}, rawOut = truthy(k.outputs) ? k.outputs : {};
-    add("inputs is an object", isDict(rawIn), pyType(rawIn));
-    add("outputs is an object", isDict(rawOut), pyType(rawOut));
+    add("inputs is an object", isDict(rawIn), pyType(rawIn, tagAt(k, "inputs")));
+    add("outputs is an object", isDict(rawOut), pyType(rawOut, tagAt(k, "outputs")));
     const inputs = isDict(rawIn) ? rawIn : {}, outputs = isDict(rawOut) ? rawOut : {}, unknown = new Set(pyStrList(k, "unknown"));
     const asOf = date(k.as_of);
     add("as_of date present", asOf !== null);
     const rawSubj = truthy(k.subject) ? k.subject : {};
-    add("subject is an object", isDict(rawSubj), pyType(rawSubj));
+    add("subject is an object", isDict(rawSubj), pyType(rawSubj, tagAt(k, "subject")));
     const subj = isDict(rawSubj) ? rawSubj : {};
     add("identity: company, ticker, exchange and share class given", ["company", "ticker", "exchange", "share_class"].every((f) => pyStr(truthy(subj[f]) ? subj[f] : "").trim()));
     const input = (n) => (Object.hasOwn(inputs, n) && isDict(inputs[n]) && isNum(inputs[n].value)) ? inputs[n].value : null;
@@ -409,7 +417,7 @@
         }
         if (er !== null) {
           const wantR = expectedRating(er, k.conviction);
-          add("rating follows the thresholds", rating === wantR, "expected return " + er + "%, conviction " + k.conviction + " -> " + wantR + "; block says " + rating);
+          add("rating follows the thresholds", rating === wantR, "expected return " + er + "%, conviction " + pyField(k, "conviction") + " -> " + wantR + "; block says " + pyField(k, "rating"));
           add("no positive rating with an expected loss", !(er < 0 && rating === "Overweight"));
         }
         const ipo = k.ipo_ratings;
@@ -527,7 +535,7 @@
   const RATING_RANK = { Overweight: 2, "Equal-weight": 1, Underweight: 0 };
   function sortTrades(rows, key, dir = "best") {
     if (!TRADE_SORTS[key]) throw new Error("unknown sort: " + key);
-    const value = (r) => key === "rating" ? RATING_RANK[r.rating] ?? null : r[key];
+    const value = (r) => key === "rating" ? RATING_RANK[r.rating] : r[key];
     let sign = TRADE_SORTS[key].best === "high" ? -1 : 1;
     if (dir === "worst") sign = -sign;
     return rows.slice().sort((a, b) => {

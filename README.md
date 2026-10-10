@@ -111,9 +111,12 @@ python evaluation/tracker.py                             # the paper bot against
 ## Tests
 
 ```bash
-python -m pytest -q tests evaluation/harness   # 715 offline tests, free: 522 for the research code (11 need Node:
+python -m pytest -q tests evaluation/harness   # 721 offline tests, free: 528 for the research code (16 need Node:
                                               # the browser demo against the Python) and 193 for the keyless bot;
                                               # both at 100% line and branch coverage
+python scripts/js_coverage.py              # the browser demo's JavaScript (docs/app/*.js): runs the Node tests with
+                                           # NODE_V8_COVERAGE set and reports line, function and branch coverage
+                                           # (100% of each for ipo-core.js); no npm needed
 IPO_BOT_LIVE=1 python -m pytest -q tests/src/test_live_market.py   # 15 live checks on real SEC filings and prices
 python testkit/kit.py regress --yes        # the test kit, live: calculation cases, hallucination traps, a tools-off
                                            # stale-data test, rule tests; costs API credit
