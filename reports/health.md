@@ -1,6 +1,6 @@
 # Bot health
 
-Run `20261010T013510Z-daily-a9b7f9` at 2026-10-10T01:35:10Z, data through the 2026-10-09 session. **Status: degraded.**
+Run `20261010T115905Z-weekly-0fae17` at 2026-10-10T11:59:05Z, data through the 2026-10-09 session. **Status: degraded.**
 
 ## Coverage
 
@@ -15,40 +15,10 @@ Run `20261010T013510Z-daily-a9b7f9` at 2026-10-10T01:35:10Z, data through the 20
 
 - missing_days: 1
 - moves: 12
-- staleness: 1
 
 ## Sources this run
 
-- prices_fallback: symbol=VRSK, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=VRSN, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=VRT, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=VRTX, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=VST, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=VTR, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=VTRS, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=VYLR, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=VZ, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=WAB, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=WAT, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=WDAY, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=WDC, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=WEC, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=WELL, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=WFC, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=WM, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=WMB, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=WMT, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=WRB, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=WSM, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=WST, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=WTW, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=WY, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=WYNN, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=XEL, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=XOM, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=XYL, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=XYZ, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
-- prices_fallback: symbol=YUM, source=cboe, errors=[('yahoo', 'rate_limited: 429 from query1.finance.yahoo.com')]
+- every source answered
 
 ## IPO pipeline
 
